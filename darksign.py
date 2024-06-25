@@ -1,13 +1,14 @@
-import ctypes
 import sys
 import queue
 import logging
-import time
 import functools
 import threading
 import pdb
-import termios
-import asyncio
+import inspect
+import tokenize
+# from importlib import util
+# import importlib.machinery
+import tempfile
 
 old_except_hook = None
 
@@ -18,78 +19,16 @@ _LOGGER.setLevel(logging.DEBUG)
 _to_watcher = queue.Queue()
 
 
-async def connect_stdin_stdout():
-    loop = asyncio.get_event_loop()
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    await loop.connect_read_pipe(lambda: protocol, sys.stdin)
-    w_transport, w_protocol = await loop.connect_write_pipe(asyncio.streams.FlowControlMixin, sys.stdout)
-    writer = asyncio.StreamWriter(w_transport, w_protocol, reader, loop)
-    return reader, writer
-
-
 class DarksignPdb(pdb.Pdb):
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.async_task_loop = None
-
     def _cmdloop(self) -> None:
+        # The only difference vs normal Pdb is that this function does not
+        # catch KeyboardInterrupt. Without this, exiting a darksign program can
+        # be difficult, since inputting q just leads to the function
+        # restarting.
         self.allow_kbdint = True
         self.cmdloop()
-        # try:
-        #     self.async_task_loop = self.async_cmdloop()
-        #     asyncio.run(self.async_task_loop)
-        # finally:
-        #     termios.tcflush(sys.stdin, termios.TCIFLUSH)
         self.allow_kbdint = False
-
-    async def async_cmdloop(self, intro=None):
-        reader, writer = await connect_stdin_stdout()
-        self.preloop()
-        if self.use_rawinput and self.completekey:
-            try:
-                print('setting up readline')
-                import readline
-                self.old_completer = readline.get_completer()
-                readline.set_completer(self.complete)
-                readline.parse_and_bind(self.completekey+": complete")
-                print('set up readline')
-            except ImportError:
-                pass
-        try:
-            if intro is not None:
-                self.intro = intro
-            if self.intro:
-                writer.write((str(self.intro)+"\n").encode())
-            stop = None
-            while not stop:
-                if self.cmdqueue:
-                    line = self.cmdqueue.pop(0)
-                else:
-                    writer.write(self.prompt.encode())
-                    await writer.drain()
-                    line = ''
-                    in_bytes = b''
-                    while '\n' not in line:
-                        in_bytes = await reader.readline()
-                        line += in_bytes.decode()
-                        print('in_bytes', in_bytes)
-                    if not len(in_bytes):
-                        line = 'EOF'
-                    else:
-                        line = line.rstrip('\r\n')
-                line = self.precmd(line)
-                stop = self.onecmd(line)
-                stop = self.postcmd(stop, line)
-            self.postloop()
-        finally:
-            if self.use_rawinput and self.completekey:
-                try:
-                    import readline
-                    readline.set_completer(self.old_completer)
-                except ImportError:
-                    pass
 
 
 PROGRAM_SHOULD_EXIT = False
@@ -97,7 +36,35 @@ PROGRAM_SHOULD_EXIT = False
 def exit():
     global PROGRAM_SHOULD_EXIT
     PROGRAM_SHOULD_EXIT = True
-    _to_watcher.put_nowait(('shutdown', (threading.get_ident())))
+
+# Mapping from original filenames to temp files
+TMP_SOURCE_FILES = {}
+
+
+def reload_function(func):
+    try:
+        module = inspect.getmodule(func)
+        source_filename = inspect.getsourcefile(func)
+        if source_filename is None:
+            # Probably used in an interactive session or something, which
+            # doesn't work :/
+            _LOGGER.error(f"Could not reload {func!r}: No known source file")
+            return None
+        source_lines, start_linenum = inspect.getsourcelines(func)
+        temp_source = tempfile.TemporaryFile(suffix='.py', mode='w')
+        contents = (['\n'] * (start_linenum - 1)) + source_lines
+        temp_source.writelines(contents)
+        file_content = ''.join(contents)
+        code = compile(file_content, source_filename, 'exec')
+        loc = {}
+        exec(code, vars(module), loc)
+        new_func = loc.get(func.__name__, None)
+        if new_func is not None:
+            TMP_SOURCE_FILES[source_filename] = temp_source
+        return new_func
+    except (OSError, SyntaxError, tokenize.TokenError) as e:
+        _LOGGER.error(f"Could not reload {func!r}: {e}")
+        return None
 
 
 def watcher_main():
@@ -111,47 +78,52 @@ def watcher_main():
             # debugger = _get_debugger_from_tb(traceback)
             # print('debugger', debugger)
 
-class CodePatched(Exception):
-    pass
+
+SHOULD_HOT_RELOAD = True
+WATCHER_THREAD = None
 
 
-WATCHER_THREAD = threading.Thread(target=watcher_main, daemon=True)
-WATCHER_THREAD.start()
-
-
-def wrap(func):
-    @functools.wraps(func)
+def wrap(original_func):
+    global WATCHER_THREAD
+    if WATCHER_THREAD is None and SHOULD_HOT_RELOAD:
+        WATCHER_THREAD = threading.Thread(target=watcher_main, daemon=True)
+        WATCHER_THREAD.start()
+    func_now = original_func
+    @functools.wraps(original_func)
     def darksign_wrapper(*args, **kwargs):
+        nonlocal func_now
         global PROGRAM_SHOULD_EXIT
+        restart_count = 0
         while not PROGRAM_SHOULD_EXIT:
+            if restart_count > 0:
+                _LOGGER.debug(f"Restarting {func_now!r}")
             try:
-                result = func(*args, **kwargs)
+                result = func_now(*args, **kwargs)
                 return result
             except Exception as e:
                 if isinstance(e, KeyboardInterrupt):
+                    # The user is probably intentionally exiting
                     PROGRAM_SHOULD_EXIT = True
-                else:
-                    traceback = sys.exc_info()[2]
-                    # print(traceback)
-                    # frame = sys._getframe()
 
+                if not PROGRAM_SHOULD_EXIT:
+                    traceback = sys.exc_info()[2]
                     debugger = DarksignPdb()
+                    debugger.reset()
                     _to_watcher.put(('tb',
                                      (threading.get_ident(),
                                       traceback,
                                       debugger)))
-                    if traceback is not None:
-                        debugger.reset()
-                        debugger.setup(traceback.tb_frame, traceback)
-                        try:
-                            debugger._cmdloop()
-                        except KeyboardInterrupt:
-                            PROGRAM_SHOULD_EXIT = True
-                            raise e
-                    # breakpoint()
-                # PROGRAM_SHOULD_EXIT could have been set in the debugger
+                    try:
+                        debugger.interaction(None, traceback)
+                    except KeyboardInterrupt:
+                        # If user input KeyboardInterrupt from the debugger,
+                        # exit the program.
+                        PROGRAM_SHOULD_EXIT = True
+                    new_func = reload_function(original_func)
+                    if new_func is not None:
+                        func_now = new_func
+
                 if PROGRAM_SHOULD_EXIT:
                     raise e
-
-            _LOGGER.debug(f"Restarting {func!r}")
+            restart_count += 1
     return darksign_wrapper
