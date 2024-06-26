@@ -10,6 +10,7 @@ import ast
 from typing import Any, Optional
 import types
 import weakref
+import re
 
 old_except_hook = None
 
@@ -64,6 +65,12 @@ class ReloadException(ValueError):
     """Exception when hot-restart fails to reload a function."""
 
     pass
+
+
+SUPER_REWRITE_RE = re.compile(r"super\((\s*)\)")
+
+def rewrite_super_closures(src):
+    return SUPER_REWRITE_RE.sub(r"super(type(self), self\1)", src)
 
 
 class FindDefPath(ast.NodeVisitor):
@@ -217,12 +224,13 @@ def build_surrogate_source(module_ast, def_path):
     target_nodes = trans.target_nodes
     def_path_str = '.'.join(def_path)
     if len(target_nodes) == 0:
-        raise ReloadException("Could not find {def_path_str} in new source")
+        raise ReloadException(f"Could not find {def_path_str} in new source")
     if len(target_nodes) > 1:
-        _LOGGER.error("Overlapping definitions of {def_path_str} in source")
+        _LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
     target_node = target_nodes[0]
     missing_lines = trans.original_lineno - target_node.lineno
     surrogate_src = "\n" * missing_lines + source
+    surrogate_src = rewrite_super_closures(surrogate_src)
     return surrogate_src
 
 HOT_RESTART_SURROGATE_RESULT = "HOT_RESTART_SURROGATE_RESULT"
@@ -495,6 +503,12 @@ def wrap_class(cls):
 HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
 HOT_RESTART_MODULE_RELOAD_CONTEXT.val = {}
 
+IS_RESTARTING_MODULE = threading.local()
+IS_RESTARTING_MODULE.val = False
+
+def is_restarting_module():
+    return IS_RESTARTING_MODULE.val
+
 
 def wrap_module(module_or_name=None):
     if module_or_name is None:
@@ -530,7 +544,7 @@ MODULE_SOURCES = {}
 CLASS_VERSIONS = {}
 
 
-def reload_module(module_or_name=None):
+def restart_module(module_or_name=None):
     if module_or_name is None:
         # Need to go get module of calling frame
         module_or_name = inspect.currentframe().f_back.f_globals["__name__"]
@@ -549,6 +563,11 @@ def reload_module(module_or_name=None):
             source = f.read()
     except (OSError, FileNotFoundError) as e:
         raise ReloadException(f"Could not load {module!r} source: {e!r}")
+
+    # Rewrite super() -> super(type(self), self)
+    # This fixes more problems than it causes.
+    # If you need to avoid it, just use the two argument form of super() manually
+    source = rewrite_super_closures(source)
 
     ORIGINAL_SOURCE_CACHE[source_filename] = source
     ORIGINAL_SOURCE_AST_CACHE[source_filename] = ast.parse(source)
@@ -572,17 +591,24 @@ def reload_module(module_or_name=None):
     code = compile(source, temp_source.name, "exec")
 
     try:
+        IS_RESTARTING_MODULE.val = True
         HOT_RESTART_MODULE_RELOAD_CONTEXT.val[module_name] = ctxt
         exec(code, ctxt, ctxt)
     finally:
+        IS_RESTARTING_MODULE.val = False
         del HOT_RESTART_MODULE_RELOAD_CONTEXT.val[module_name]
 
     # Patch classes in original module so that old instances get new methods
     def patch_class(dst_cls, src_cls, path):
+        print("patching", path)
         for src_k, src_v in inspect.getmembers(src_cls):
+            if src_k.startswith('__'):
+                # Likely magic, do not patch
+                continue
             dst_v = getattr(dst_cls, src_k, None)
             if dst_v and inspect.isclass(dst_v) and inspect.isclass(src_v):
                 patch_class(dst_v, src_v, path=f"{path}.{src_k}")
+            print("setattr(", v, src_k, src_v, ")")
             setattr(v, src_k, src_v)
 
         # It's impossible to prevent some old versions of the class from being
@@ -615,6 +641,9 @@ def reload_module(module_or_name=None):
     # still exist somwhere
     MODULE_SOURCES.get(module.__name__, []).append(temp_source)
 
+# Convenient alias
+reload_module = restart_module
+
 
 __all__ = [
     "wrap",
@@ -625,4 +654,7 @@ __all__ = [
     "PROGRAM_SHOULD_EXIT",
     "PRINT_HELP_MESSAGE",
     "ReloadException",
+    "restart_module",
+    "reload_module",
+    "is_restarting_module",
 ]

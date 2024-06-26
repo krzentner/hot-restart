@@ -39,4 +39,5 @@ def mini():
     assert False
 
 hot_restart.wrap_module()
-outer()
+if not hot_restart.is_restarting_module():
+    outer()
