@@ -1,38 +1,33 @@
 import sys
-import queue
 import logging
 import functools
-import threading
 import pdb
 import inspect
-from token import OP
 import tokenize
 import tempfile
 import ast
 from typing import Any, Optional
-import textwrap
 import types
 
 old_except_hook = None
 
-_LOGGER = logging.getLogger('darksign')
+_LOGGER = logging.getLogger('hot-restart')
 _LOGGER.addHandler(logging.StreamHandler(sys.stderr))
 _LOGGER.setLevel(logging.ERROR)
 
-_to_watcher = queue.Queue()
 
-
-class DarksignPdb(pdb.Pdb):
+class HotRestartPdb(pdb.Pdb):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # This flag is used to recursively exit the whole program, instead of
+        # just exiting one post-mortem session.
         self.program_should_exit = False
 
     def _cmdloop(self) -> None:
         # The only difference vs normal Pdb is that this function does not
-        # catch KeyboardInterrupt. Without this, exiting a darksign program can
-        # be difficult, since inputting q just leads to the function
-        # restarting.
+        # catch KeyboardInterrupt. This allows Ctrl-C to "jump up one level of
+        # the stack", instead of clearing the current line.
         self.allow_kbdint = True
         self.cmdloop()
         self.allow_kbdint = False
@@ -46,18 +41,30 @@ class DarksignPdb(pdb.Pdb):
 PROGRAM_SHOULD_EXIT = False
 
 def exit():
+    """It can sometimes be hard to exit hot_restart programs.
+    Calling this function (and exiting any debugger sessions) will
+    short-circuit any hot_restart wrappers.
+    """
     global PROGRAM_SHOULD_EXIT
     PROGRAM_SHOULD_EXIT = True
 
-# Mapping from original filenames to temp files
+# Mapping from definition paths to temp files of reloaded code.
+# Temp files are allocated to hold surrogate source so that the debugger can
+# still show correct code listings even after the files are updated.
+# One source file is allocated per function.
 TMP_SOURCE_FILES = {}
 
 
 class ReloadException(ValueError):
+    """Exception when hot-restart fails to reload a function."""
     pass
 
 
 class FindDefPath(ast.NodeVisitor):
+    """Given a target name and line number of a definition, find a definition path.
+
+    This gives a more durable identity to a function than its original line number.
+    """
     def __init__(self, target_name: str, target_lineno: int):
         super().__init__()
         self.target_name = target_name
@@ -77,26 +84,16 @@ class FindDefPath(ast.NodeVisitor):
             return super().generic_visit(node)
 
 
-class GetDefFromePath(ast.NodeVisitor):
-    def __init__(self, target_path: list[str]):
-        super().__init__()
-        self.target_path = target_path
-        self.depth = 0
-        self.found_defs = []
-
-    def generic_visit(self, node: ast.AST) -> Any:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            if node.name == self.target_path[self.depth]:
-                self.depth += 1
-                if self.depth == len(self.target_path):
-                    self.found_defs.append(node)
-                res = super().generic_visit(node)
-                self.depth -= 1
-                return res
-        return super().generic_visit(node)
-
-
 class SurrogateTransformer:
+    """Transforms module source ast into a module only containing a target
+    function and any surrounding scopes necessary for the compile to build the
+    right closure for that target.
+    This module is compiled and executed in the context of the original module,
+    preventing side effects.
+
+    This is necessary for super() to work, since it implicitly is a closure
+    over __class__.
+    """
 
     def __init__(self, target_path: list[str]):
         self.target_path = target_path
@@ -177,8 +174,8 @@ class SurrogateTransformer:
 
 def build_surrogate_source(module_ast, def_path):
     """Builds a source file containing the definition of def_path at the same
-    lineno as in the original source, with the same parent class(es), but with
-    all other lines empty.
+    lineno as in the ast, with the same parent class(es), but with all other
+    lines empty.
     """
     trans = SurrogateTransformer(target_path=def_path)
     new_ast = ast.fix_missing_locations(trans.flatten_module(module_ast))
@@ -187,6 +184,8 @@ def build_surrogate_source(module_ast, def_path):
     target_node = trans.target_node
     if target_node is None:
         raise ReloadException("Could not find {'.'.join(def_path)} in new source")
+    # TODO(krzentner): Figure out why there's -2 here. Do we need to account
+    # for the number of decorators attached to the def?
     missing_lines = (trans.original_lineno - target_node.lineno - 2)
     surrogate_src = '\n' * missing_lines + source
     return surrogate_src
@@ -196,7 +195,7 @@ ORIGINAL_SOURCE_CACHE = {}
 ORIGINAL_SOURCE_AST_CACHE = {}
 
 
-def get_def_path(func):
+def get_def_path(func) -> Optional[list[str]]:
     source_filename = inspect.getsourcefile(func)
     if source_filename not in ORIGINAL_SOURCE_AST_CACHE:
         with open(source_filename, 'r') as f:
@@ -219,88 +218,85 @@ def get_def_path(func):
 
 
 def reload_function(def_path: list[str], func):
+    """Takes in a definition path and function, and returns a new version of
+    that function reloaded from source.
+
+    This _does not_ cause the function to be reloaded in place (that's
+    significantly more difficult to do, especially in a thread safe way).
+    """
+
+    def_str = '.'.join(def_path)
+    source_filename = inspect.getsourcefile(func)
     try:
-        source_filename = inspect.getsourcefile(func)
         with open(source_filename, 'r') as f:
             all_source = f.read()
+    except (OSError, FileNotFoundError, tokenize.TokenError) as e:
+        _LOGGER.error(f"Could not read source for {func!r}: {e!r}")
+        return None
+    try:
         src_ast = ast.parse(all_source, filename=source_filename)
-
-        module = inspect.getmodule(func)
-        if source_filename is None:
-            # Probably used in an interactive session or something, which
-            # doesn't work :/
-            _LOGGER.error(f"Could not reload {func!r}: No known source file")
-            return None
-        surrogate_src = build_surrogate_source(src_ast, def_path)
-
-        flat_filename = (
-            source_filename
-                .replace('/', '_')
-                .replace('\\', '_')
-                .replace(':', '_')
-        )
-        temp_source = tempfile.NamedTemporaryFile(
-            suffix=flat_filename, mode='w')
-        temp_source.write(surrogate_src)
-        temp_source.flush()
-        # _LOGGER.debug("=== SURROGATE SOURCE ===")
-        # _LOGGER.debug(surrogate_src)
-        code = compile(surrogate_src, temp_source.name, 'exec')
-        loc = {}
-        exec(code, vars(module), loc)
-        for var_name in def_path[:-1]:
-            loc = vars(loc[var_name])
-        raw_func = loc.get(func.__name__, None)
-        if raw_func is None:
-            raise ReloadException("Could not retrieve {'.'.join(def_path)}")
-        new_func = types.FunctionType(
-            raw_func.__code__,
-            func.__globals__,
-            func.__name__,
-            raw_func.__defaults__,
-            func.__closure__, # TODO: Match up cell names, instead of blindly copying __closure__
-        )
-        if new_func is not None:
-            TMP_SOURCE_FILES[source_filename] = temp_source
-        print(f"> Reloaded {'.'.join(def_path)}")
-        return new_func
-    except (OSError, SyntaxError, tokenize.TokenError) as e:
-        _LOGGER.error(f"Could not reload {func!r}: {e}")
+    except SyntaxError as e:
+        _LOGGER.error(f"Could not read source for {func!r}: {e!r}")
         return None
 
+    module = inspect.getmodule(func)
+    if source_filename is None:
+        # Probably used in an interactive session or something, which
+        # we don't know how to get source code from.
+        _LOGGER.error(f"Could not reload {func!r}: No known source file")
+        return None
+    surrogate_src = build_surrogate_source(src_ast, def_path)
 
-def watcher_main():
-    while True:
-        cmd, contents = _to_watcher.get(block=True)
-        if cmd == 'tb':
-            thread_id, traceback, debugger = contents
-            # time.sleep(2.0)
-            # print("Code was patched, interrupting debugger...")
-            # ctype_async_raise(thread_id, CodePatched())
-            # debugger = _get_debugger_from_tb(traceback)
-            # print('debugger', debugger)
-        elif cmd == 'watch':
-            source_filename, original_obj = contents
-        else:
-            _LOGGER.error(f"Uknown watcher command: {cmd}")
+    # Create a "flattened filename" to use as a temp file suffix.
+    # This way we avoid needing to clean up any temporary directories.
+    flat_filename = (
+        source_filename
+            .replace('/', '_')
+            .replace('\\', '_')
+            .replace(':', '_')
+    )
+    temp_source = tempfile.NamedTemporaryFile(
+        suffix=flat_filename, mode='w')
+    temp_source.write(surrogate_src)
+    temp_source.flush()
+    _LOGGER.debug("=== SURROGATE SOURCE BEGIN ===")
+    _LOGGER.debug(surrogate_src)
+    _LOGGER.debug("=== SURROGATE SOURCE END ===")
+    code = compile(surrogate_src, temp_source.name, 'exec')
+    loc = {}
+    exec(code, dict(vars(module)), loc)
+    for var_name in def_path[:-1]:
+        loc = vars(loc[var_name])
+    raw_func = loc.get(func.__name__, None)
+    if raw_func is None:
+        _LOGGER.error(f"Could not reload {func!r}: Could not find {def_str}")
+        return None
+    new_func = types.FunctionType(
+        raw_func.__code__,
+        func.__globals__,
+        func.__name__,
+        raw_func.__defaults__,
+        # TODO(krzentner): Match up cell names, instead of blindly copying __closure__
+        func.__closure__,
+    )
+    # Keep new temp file alive until function is reloaded again
+    TMP_SOURCE_FILES[def_str] = temp_source
+    return new_func
 
 
 SHOULD_HOT_RELOAD = True
-WATCHER_THREAD = None
-PRINT_HELP_MESSAGE = False
+PRINT_HELP_MESSAGE = True
 
 
 def wrap(original_func):
-    global WATCHER_THREAD
-    if WATCHER_THREAD is None and SHOULD_HOT_RELOAD:
-        WATCHER_THREAD = threading.Thread(target=watcher_main, daemon=True)
-        WATCHER_THREAD.start()
     def_path = get_def_path(original_func)
-    source_filename = inspect.getsourcefile(original_func)
-    # _to_watcher.put(('watch', (source_filename, original_func)))
+    if def_path is None:
+        _LOGGER.error("Could not get definition path for {original_func!r}")
+        # Assume it's the trivial path
+        def_path = [original_func.__name__]
     func_now = original_func
     @functools.wraps(original_func)
-    def darksign_wrapper(*args, **kwargs):
+    def hot_restart_wrapper(*args, **kwargs):
         nonlocal func_now
         global PROGRAM_SHOULD_EXIT
         global PRINT_HELP_MESSAGE
@@ -333,27 +329,24 @@ def wrap(original_func):
                         print("> (q)uit to exit program")
                         PRINT_HELP_MESSAGE = False
                     print(">")
-                    debugger = DarksignPdb()
+                    debugger = HotRestartPdb()
                     debugger.reset()
 
-                    # Adjust starting frame of debugger
+                    # Adjust starting frame of debugger to point at wrapped
+                    # function (just below "this" frame).
                     height = 0
                     tb_next = traceback.tb_next
                     while tb_next.tb_next is not None:
                         height += 1
                         tb_next = tb_next.tb_next
 
-                    for _ in range(height):
-                        debugger.cmdqueue.append('u')
+                    debugger.cmdqueue.extend(['u'] * height)
 
                     # Show function source
                     # TODO(krzentner): Use original source, instead of
                     # re-fetching from file (which may be out of date)
                     debugger.cmdqueue.append('ll')
-                    _to_watcher.put(('tb',
-                                     (threading.get_ident(),
-                                      traceback,
-                                      debugger)))
+
                     try:
                         debugger.interaction(None, traceback)
                     except KeyboardInterrupt:
@@ -368,6 +361,14 @@ def wrap(original_func):
                 else:
                     new_func = reload_function(def_path, original_func)
                     if new_func is not None:
+                        print(f"> Reloaded {new_func!r}")
                         func_now = new_func
             restart_count += 1
-    return darksign_wrapper
+    return hot_restart_wrapper
+
+__all__ = [
+    'wrap',
+    'exit',
+    'PROGRAM_SHOULD_EXIT',
+    'PRINT_HELP_MESSAGE',
+]

@@ -1,7 +1,7 @@
-import darksign
+import hot_restart
 
 
-@darksign.wrap
+@hot_restart.wrap
 def outer():
     print('in outer')
     x = 1
@@ -22,7 +22,7 @@ class Parent:
 
 class Inner(Parent):
 
-    @darksign.wrap
+    @hot_restart.wrap
     def inner(self, y_inner, k='test'):
         super().inner()
         print(self)
