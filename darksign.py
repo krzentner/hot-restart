@@ -5,10 +5,11 @@ import functools
 import threading
 import pdb
 import inspect
+from token import OP
 import tokenize
 import tempfile
 import ast
-from typing import Any
+from typing import Any, Optional
 import textwrap
 import types
 
@@ -16,7 +17,7 @@ old_except_hook = None
 
 _LOGGER = logging.getLogger('darksign')
 _LOGGER.addHandler(logging.StreamHandler(sys.stderr))
-_LOGGER.setLevel(logging.DEBUG)
+_LOGGER.setLevel(logging.ERROR)
 
 _to_watcher = queue.Queue()
 
@@ -95,18 +96,100 @@ class GetDefFromePath(ast.NodeVisitor):
         return super().generic_visit(node)
 
 
-def get_sourcelines(module_source, module_ast, def_path):
-    visitor = GetDefFromePath(target_path=def_path)
-    visitor.visit(module_ast)
-    try:
-        definition = visitor.found_defs[0]
-    except IndexError:
-        raise ReloadException(f"Could not find defintion for {'.'.join(def_path)}")
-    src_segment = ast.get_source_segment(module_source, definition, padded=True)
-    if src_segment is None:
-        raise ReloadException(f"Definition of {'.'.join(def_path)} does not have a source segment")
-    src_segment = textwrap.dedent(src_segment)
-    return src_segment, definition.lineno
+class SurrogateTransformer:
+
+    def __init__(self, target_path: list[str]):
+        self.target_path = target_path
+        self.depth = 0
+        self.target_node = None
+        self.original_lineno = 0
+
+    def flatten_module(self, node: ast.Module) -> ast.Module:
+        return ast.Module(
+                body=self.visit_body(node.body),
+                type_ignores=node.type_ignores)
+
+    def visit_body(self, nodes: list[ast.AST]) -> list[ast.AST]:
+        new_nodes = []
+        for n in nodes:
+            new_nodes.extend(self.flatten_visit(n))
+        return new_nodes
+
+    def flatten_visit(self, node: ast.AST) -> list[ast.AST]:
+        if isinstance(node, ast.ClassDef):
+            if node.name != self.target_path[self.depth]:
+                return []
+            try:
+                self.depth += 1
+                return [ast.ClassDef(
+                    name=node.name,
+                    bases=[],
+                    keywords=node.keywords,
+                    body=self.visit_body(node.body),
+                    decorator_list=[],
+                )]
+            finally:
+                self.depth -= 1
+        elif isinstance(node, ast.FunctionDef):
+            if node.name != self.target_path[self.depth]:
+                return []
+            try:
+                self.depth += 1
+                if self.depth == len(self.target_path):
+                    self.original_lineno = node.lineno
+                    # Found the function def
+                    self.target_node = ast.FunctionDef(
+                        name=node.name,
+                        args=node.args,
+                        body=node.body,
+                        decorator_list=[],
+                        returns=node.returns,
+                    )
+                    return [self.target_node]
+                else:
+                    # This is not the leaf function.
+                    # Transform this function into a stub function that
+                    # just creates an inner function and returns it.
+
+                    # TODO: Create local variables to match original
+                    # function so that closure bindings are created
+                    # correctly
+
+                    new_body = [self.generic_visit(n) for n in node.body]
+                    new_body = [n for n in new_body if n]
+                    new_body.append(ast.Return(
+                        value=ast.Name(self.target_path[self.depth], ctx=ast.Load())
+                    ))
+                    return [ast.FunctionDef(
+                        name=node.name,
+                        args=[],
+                        body=new_body,
+                        decorator_list=[],
+                        returns=node.returns,
+                    )]
+            finally:
+                self.depth -= 1
+        elif hasattr(node, 'body') or hasattr(node, 'orelse'):
+            return self.visit_body(getattr(node, 'body', []) + getattr(node, 'orelse', []))
+        else:
+            return []
+
+
+def build_surrogate_source(module_ast, def_path):
+    """Builds a source file containing the definition of def_path at the same
+    lineno as in the original source, with the same parent class(es), but with
+    all other lines empty.
+    """
+    trans = SurrogateTransformer(target_path=def_path)
+    new_ast = ast.fix_missing_locations(trans.flatten_module(module_ast))
+    _LOGGER.debug(ast.dump(new_ast, indent=2))
+    source = ast.unparse(new_ast)
+    target_node = trans.target_node
+    if target_node is None:
+        raise ReloadException("Could not find {'.'.join(def_path)} in new source")
+    missing_lines = (trans.original_lineno - target_node.lineno - 2)
+    surrogate_src = '\n' * missing_lines + source
+    return surrogate_src
 
 
 ORIGINAL_SOURCE_CACHE = {}
@@ -130,15 +213,12 @@ def get_def_path(func):
         _LOGGER.error(f"Could not find definition of {func!r}")
         return None
     def_path = visitor.found_def_paths[0]
-    src_segment, lineno = get_sourcelines(
-            ORIGINAL_SOURCE_CACHE[source_filename], module_ast, def_path)
-    del lineno
+    # Check that we can build a surrogate source for this func
+    build_surrogate_source(module_ast, def_path)
     return visitor.found_def_paths[0]
 
 
-def reload_function(def_path, func):
-    # print(dir(func))
-    # print(func.__closure__)
+def reload_function(def_path: list[str], func):
     try:
         source_filename = inspect.getsourcefile(func)
         with open(source_filename, 'r') as f:
@@ -151,36 +231,38 @@ def reload_function(def_path, func):
             # doesn't work :/
             _LOGGER.error(f"Could not reload {func!r}: No known source file")
             return None
-        # source_lines, start_linenum = inspect.getsourcelines(func)
+        surrogate_src = build_surrogate_source(src_ast, def_path)
 
-        source_lines, start_linenum = get_sourcelines(
-            all_source, src_ast, def_path)
-
-        matched_lineno_src = ('\n' * (start_linenum - 1)) + source_lines
-
-        temp_source = tempfile.TemporaryFile(suffix='.py', mode='w')
-        temp_source.write(matched_lineno_src)
-        print('=== Reloading ===')
-        print(matched_lineno_src)
-        code = compile(matched_lineno_src, source_filename, 'exec')
-        context = module
-        for var_name in def_path[:-1]:
-            context = getattr(context, var_name)
-        loc = dict(vars(context))
-        print('Executing with context:', context)
+        flat_filename = (
+            source_filename
+                .replace('/', '_')
+                .replace('\\', '_')
+                .replace(':', '_')
+        )
+        temp_source = tempfile.NamedTemporaryFile(
+            suffix=flat_filename, mode='w')
+        temp_source.write(surrogate_src)
+        temp_source.flush()
+        # _LOGGER.debug("=== SURROGATE SOURCE ===")
+        # _LOGGER.debug(surrogate_src)
+        code = compile(surrogate_src, temp_source.name, 'exec')
+        loc = {}
         exec(code, vars(module), loc)
+        for var_name in def_path[:-1]:
+            loc = vars(loc[var_name])
         raw_func = loc.get(func.__name__, None)
-        # new_func = types.FunctionType(
-        #     raw_func.__code__,
-        #     func.__globals__,
-        #     func.__name__,
-        #     raw_func.__defaults__,
-        #     func.__closure__, # TODO: Match up cell names, instead of blindly copying __closure__
-        # )
-        print('=== Done Reloading ===')
+        if raw_func is None:
+            raise ReloadException("Could not retrieve {'.'.join(def_path)}")
+        new_func = types.FunctionType(
+            raw_func.__code__,
+            func.__globals__,
+            func.__name__,
+            raw_func.__defaults__,
+            func.__closure__, # TODO: Match up cell names, instead of blindly copying __closure__
+        )
         if new_func is not None:
             TMP_SOURCE_FILES[source_filename] = temp_source
-        print(f"Reloaded {func.__name__!r}")
+        print(f"> Reloaded {'.'.join(def_path)}")
         return new_func
     except (OSError, SyntaxError, tokenize.TokenError) as e:
         _LOGGER.error(f"Could not reload {func!r}: {e}")
@@ -239,18 +321,18 @@ def wrap(original_func):
                     traceback = sys.exc_info()[2]
 
                     # Print basic commands
-                    print()
+                    print(">")
                     # e_msg = str(e)
                     e_msg = repr(e)
                     if not e_msg:
                         e_msg = repr(e)
-                    print(f"{func_now.__name__}: {e_msg}")
+                    print(f"> {func_now.__name__}: {e_msg}")
                     if PRINT_HELP_MESSAGE:
-                        print(f"(c)ontinue to revive {func_now.__name__!r}")
-                        print("Ctrl-C to re-raise exception")
-                        print("(q)uit to exit program")
+                        print(f"> (c)ontinue to revive {func_now.__name__!r}")
+                        print("> Ctrl-C to re-raise exception")
+                        print("> (q)uit to exit program")
                         PRINT_HELP_MESSAGE = False
-                    print()
+                    print(">")
                     debugger = DarksignPdb()
                     debugger.reset()
 
