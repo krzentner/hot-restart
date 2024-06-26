@@ -9,7 +9,6 @@ import tempfile
 import ast
 from typing import Any, Optional
 import types
-import weakref
 import re
 
 old_except_hook = None
@@ -288,12 +287,12 @@ def reload_function(def_path: list[str], func):
         with open(source_filename, "r") as f:
             all_source = f.read()
     except (OSError, FileNotFoundError, tokenize.TokenError) as e:
-        _LOGGER.error(f"Could not read source for {func!r}: {e!r}")
+        _LOGGER.error(f"Could not read source for {func!r} from {source_filename}: {e!r}")
         return None
     try:
         src_ast = ast.parse(all_source, filename=source_filename)
     except SyntaxError as e:
-        _LOGGER.error(f"Could not read source for {func!r}: {e!r}")
+        _LOGGER.error(f"Could not parse source for {func!r}: {e!r}")
         return None
 
     module = inspect.getmodule(func)
@@ -540,10 +539,6 @@ def wrap_module(module_or_name=None):
         module_d[k] = v
 
 
-MODULE_SOURCES = {}
-CLASS_VERSIONS = {}
-
-
 def restart_module(module_or_name=None):
     if module_or_name is None:
         # Need to go get module of calling frame
@@ -573,22 +568,13 @@ def restart_module(module_or_name=None):
     ORIGINAL_SOURCE_AST_CACHE[source_filename] = ast.parse(source)
 
     _LOGGER.info(f"Reloading module {module!r} from source file {source_filename}")
-    flat_filename = (
-        source_filename.replace("/", "_").replace("\\", "_").replace(":", "_")
-    )
-
-    # Allocate a temporary source file to make debugger listings more accurate
-    temp_source = tempfile.NamedTemporaryFile(suffix=flat_filename, mode="w")
-    temp_source.write(source)
-    temp_source.flush()
-
     _LOGGER.debug("=== RELOAD SOURCE BEGIN ===")
     _LOGGER.debug(source)
     _LOGGER.debug("=== RELOAD SOURCE END ===")
 
     # Exec new source in copy of the context of the old module
     ctxt = dict(vars(module))
-    code = compile(source, temp_source.name, "exec")
+    code = compile(source, source_filename, "exec")
 
     try:
         IS_RESTARTING_MODULE.val = True
@@ -598,48 +584,8 @@ def restart_module(module_or_name=None):
         IS_RESTARTING_MODULE.val = False
         del HOT_RESTART_MODULE_RELOAD_CONTEXT.val[module_name]
 
-    # Patch classes in original module so that old instances get new methods
-    def patch_class(dst_cls, src_cls, path):
-        print("patching", path)
-        for src_k, src_v in inspect.getmembers(src_cls):
-            if src_k.startswith('__'):
-                # Likely magic, do not patch
-                continue
-            dst_v = getattr(dst_cls, src_k, None)
-            if dst_v and inspect.isclass(dst_v) and inspect.isclass(src_v):
-                patch_class(dst_v, src_v, path=f"{path}.{src_k}")
-            print("setattr(", v, src_k, src_v, ")")
-            setattr(v, src_k, src_v)
-
-        # It's impossible to prevent some old versions of the class from being
-        # around. Unforunately this makes each reload of a module take more
-        # time (O(n^2) cost for n reloads), but we use weakref to only patch
-        # classes that are still potentially in use.
-        previous_class_versions = CLASS_VERSIONS.get(path, [])
-        previous_class_versions = [r for r in previous_class_versions if r()]
-        for prev_version in previous_class_versions:
-            strong_ref = prev_version()
-            if strong_ref is not None:
-                for src_k, src_v in inspect.getmembers(src_cls):
-                    setattr(strong_ref, src_k, src_v)
-        previous_class_versions.append(weakref.ref(dst_cls))
-        CLASS_VERSIONS[path] = previous_class_versions
-
     for k, v in ctxt.items():
-        if inspect.isclass(v):
-            dst_cls = getattr(module, k, None)
-            if dst_cls and inspect.isclass(dst_cls):
-                patch_class(dst_cls, v, path=module.__name__)
-        # Still try to use the most recent version of each class
-        # We're most likely using code with references to the newest version
-        # Unforunately this might result in confusion when performing
-        # isinstance checks across modules
         setattr(module, k, v)
-
-    # Just keep all of the old source files around until the program exits
-    # It's very difficult to tell if any functions from this source function
-    # still exist somwhere
-    MODULE_SOURCES.get(module.__name__, []).append(temp_source)
 
 # Convenient alias
 reload_module = restart_module
