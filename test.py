@@ -1,7 +1,10 @@
 import hot_restart
+import functools
+import inspect
 
 
 @hot_restart.wrap
+@functools.cache
 def outer():
     print('in outer')
     x = 1
@@ -13,7 +16,7 @@ def outer():
         raise e
     return y + z
 
-print('hi')
+print('IN TEST MODULE')
 
 class Parent:
 
@@ -22,7 +25,6 @@ class Parent:
 
 class Inner(Parent):
 
-    @hot_restart.wrap
     def inner(self, y_inner, k='test'):
         super().inner()
         print(self)
@@ -32,7 +34,9 @@ class Inner(Parent):
         k.append(z)
         return z ** 2, k
 
+@hot_restart.no_wrap
 def mini():
     assert False
 
+hot_restart.wrap_module()
 outer()
