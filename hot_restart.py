@@ -1,3 +1,71 @@
+"""Restart debugging your program in the function that failed.
+
+Minimal hot-reload-and-restart library.
+
+## Usage:
+
+Wrap any function you expect to crash in @hot_restart.wrap:
+
+```
+import hot_restart
+
+@hot_restart.wrap
+def my_func():
+    ...
+
+@hot_restart.wrap_class
+class MyClass:
+
+    def forward(self, x):
+        super().forward(x * 2)
+```
+
+Alternatively, call `hot_restart.wrap_module()` after your functions and
+classes are defined.
+
+When a wrapped function crashes, hot_restart will open a post mortem debugger
+in the wrapped function, with the rest of the stack still live above that
+function call.
+
+Then you can modify the source code of your crashing function, and (c)ontinue
+from the debugger, and hot_restart will reload the source of that function (and
+only that function).
+
+
+## Edge Cases
+
+You can also trigger a full module reload with `hot_restart.reload_module()`,
+although that may result in duplicate (i.e. conflicting) class defintions.
+
+hot_restart uses source re-writing to handle the common cases, and does not
+patch the byte-code of functions.
+
+### `super()` Calls
+
+hot_restart rewrites `super()` into `super(type(self, self)` in reloaded source
+(original source is loaded intact). This prevents methods from acquiring a
+closure variable `__class__`, which would break in many cases, but this
+re-write can fail if `self` is not defined where `super()` is used. This
+restriction may be removed in the future.
+
+To work around this, you can use the two-argument form of `super()` manually.
+
+### Closures and Nested Functions
+
+hot_restart will patch in old closure variables into newly defined functions,
+as long as `hot_restart.wrap` is the innermost decorator.
+However, functions cannot add new closure variables without a full module
+reload. Functions can still gain new arguments.
+
+For nested functions, `hot_restart.wrap_module()` cannot find the inner
+function, so `hot_restart.wrap()` must be used manually.
+
+If `hot_restart.wrap` is not the inner most decorator, then closure variables
+will be lost.
+"""
+
+__version__ = "0.1"
+
 import threading
 import sys
 import logging
@@ -175,8 +243,10 @@ class SurrogateTransformer:
                         )
                     )
                     freevar_bindings = ast.parse(
-                        "\n".join(f"{var} = 'HOT_RESTART_UNPATCHED_CLOSURE'"
-                                  for var in self.free_vars)
+                        "\n".join(
+                            f"{var} = 'HOT_RESTART_LOST_CLOSURE'"
+                            for var in self.free_vars
+                        )
                     ).body
                     res = (
                         freevar_bindings
@@ -227,18 +297,21 @@ class SurrogateTransformer:
             return []
 
 
-def build_surrogate_source(module_ast, def_path, free_vars):
+def build_surrogate_source(source_text, module_ast, def_path, free_vars):
     """Builds a source file containing the definition of def_path at the same
     lineno as in the ast, with the same parent class(es), but with all other
     lines empty.
     """
     trans = SurrogateTransformer(target_path=def_path, free_vars=free_vars)
     new_ast = ast.fix_missing_locations(trans.flatten_module(module_ast))
-    # _LOGGER.debug(ast.dump(new_ast, indent=2))
     source = ast.unparse(new_ast)
     target_nodes = trans.target_nodes
     def_path_str = ".".join(def_path)
     if len(target_nodes) == 0:
+        _LOGGER.debug("=== BEGIN SOURCE TEXT ===")
+        _LOGGER.debug(source_text)
+        _LOGGER.debug("=== END SOURCE TEXT ===")
+        _LOGGER.debug(ast.dump(new_ast, indent=2))
         raise ReloadException(f"Could not find {def_path_str} in new source")
     if len(target_nodes) > 1:
         _LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
@@ -288,7 +361,9 @@ def get_def_path(func) -> Optional[list[str]]:
         return None
     def_path = visitor.found_def_paths[0]
     # Check that we can build a surrogate source for this func
-    build_surrogate_source(module_ast, def_path, unwrapped_func.__code__.co_freevars)
+    build_surrogate_source(
+        source_content, module_ast, def_path, unwrapped_func.__code__.co_freevars
+    )
     return visitor.found_def_paths[0]
 
 
@@ -325,7 +400,7 @@ def reload_function(def_path: list[str], func):
         _LOGGER.error(f"Could not reload {func!r}: No known source file")
         return None
     surrogate_src = build_surrogate_source(
-        src_ast, def_path, unwrapped_func.__code__.co_freevars
+        all_source, src_ast, def_path, unwrapped_func.__code__.co_freevars
     )
 
     # Create a "flattened filename" to use as a temp file suffix.
@@ -358,6 +433,19 @@ def reload_function(def_path: list[str], func):
         return None
     if raw_func is inspect.unwrap(raw_func):
         # We are wrapping directly, patch up closure.
+        closure = unwrapped_func.__closure__
+        if closure is None:
+            closure = ()
+        n_freevars = len(raw_func.__code__.co_freevars)
+        if not isinstance(closure, tuple) or n_freevars != len(closure):
+            _LOGGER.error(
+                f"New {def_str} has closure cells {closure!r}"
+                f" but {n_freevars} cells were expected"
+            )
+            _LOGGER.error(f"Closures in {def_str} lost")
+            closure = tuple(
+                [types.CellType("HOT_RESTART_LOST_CLOSURE") for _ in range(n_freevars)]
+            )
         new_func = types.FunctionType(
             raw_func.__code__,
             func.__globals__,
@@ -366,7 +454,7 @@ def reload_function(def_path: list[str], func):
             # If the new source "closes over" new variables, then those will
             # turn into confusing "global not defined" messages.
             # TODO(krzentner): Find a way to print a good error message in this case.
-            func.__closure__,
+            closure,
         )
     else:
         # We already warn about this on wrap, no need to repeat on reload
@@ -566,12 +654,15 @@ def wrap_module(module_or_name=None):
             _LOGGER.info(f"Skipping wrapping of no_wrap {v!r}")
         elif getattr(v, HOT_RESTART_ALREADY_WRAPPED, False):
             _LOGGER.info(f"Skipping already wrapped {v!r}")
-        elif callable(k):
-            _LOGGER.info(f"Wrapping callable {v!r}")
-            out_d[k] = wrap(v)
         elif inspect.isclass(v):
             _LOGGER.info(f"Wrapping class {v!r}")
             wrap_class(v)
+        elif callable(v):
+            _LOGGER.info(f"Wrapping callable {v!r}")
+            out_d[k] = wrap(v)
+        else:
+            _LOGGER.info(f"Not wrapping {v!r}")
+
     for k, v in out_d.items():
         module_d[k] = v
 
