@@ -38,6 +38,19 @@ class Inner(Parent):
 def mini():
     assert False
 
+def outer_fn():
+    x, y = 1, 2
+
+    @hot_restart.wrap
+    @functools.cache
+    def inner_fn(s):
+        # assert False
+        print('y', y)
+        print('x', x)
+        print(s)
+    inner_fn('test')
+    inner_fn('test')
+
 hot_restart.wrap_module()
 if not hot_restart.is_restarting_module():
-    outer()
+    outer_fn()

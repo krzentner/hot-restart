@@ -15,7 +15,7 @@ old_except_hook = None
 
 _LOGGER = logging.getLogger("hot-restart")
 handler = logging.StreamHandler(sys.stderr)
-formatter = logging.Formatter('%(levelname)s (%(name)s): %(message)s')
+formatter = logging.Formatter("%(levelname)s (%(name)s): %(message)s")
 handler.setFormatter(formatter)
 _LOGGER.addHandler(handler)
 _LOGGER.setLevel(logging.WARN)
@@ -68,6 +68,7 @@ class ReloadException(ValueError):
 
 SUPER_REWRITE_RE = re.compile(r"super\((\s*)\)")
 
+
 def rewrite_super_closures(src):
     return SUPER_REWRITE_RE.sub(r"super(type(self), self\1)", src)
 
@@ -88,8 +89,10 @@ class FindDefPath(ast.NodeVisitor):
     def generic_visit(self, node: ast.AST) -> Any:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             self.path_now.append(node)
-            start_lineno = min([node.lineno] + [dec.lineno for dec in node.decorator_list])
-            end_lineno = getattr(node, 'end_lineno', 0)
+            start_lineno = min(
+                [node.lineno] + [dec.lineno for dec in node.decorator_list]
+            )
+            end_lineno = getattr(node, "end_lineno", 0)
             if node.name == self.target_name:
                 if (
                     start_lineno <= self.target_lineno
@@ -119,11 +122,12 @@ class SurrogateTransformer:
     over __class__.
     """
 
-    def __init__(self, target_path: list[str]):
+    def __init__(self, target_path: list[str], free_vars: list[str]):
         self.target_path = target_path
         self.depth = 0
         self.target_nodes = []
         self.original_lineno = 0
+        self.free_vars = free_vars
 
     def flatten_module(self, node: ast.Module) -> ast.Module:
         return ast.Module(
@@ -161,19 +165,31 @@ class SurrogateTransformer:
                 if self.depth == len(self.target_path):
                     self.original_lineno = node.lineno
                     # Found the function def
-                    self.target_nodes.append(ast.FunctionDef(
-                        name=node.name,
-                        args=node.args,
-                        body=node.body,
-                        decorator_list=node.decorator_list,
-                        returns=node.returns,
-                    ))
-                    res = [
-                        self.target_nodes[-1]
-                        # If the original function was explicitly wrapped, the
-                        # wrapper will set HOT_RESTART_SURROGATE_RESULT,
-                        # otherwise generate some code here to set it.
-                    ] + ast.parse(f"globals().setdefault('HOT_RESTART_SURROGATE_RESULT', {node.name})").body
+                    self.target_nodes.append(
+                        ast.FunctionDef(
+                            name=node.name,
+                            args=node.args,
+                            body=node.body,
+                            decorator_list=node.decorator_list,
+                            returns=node.returns,
+                        )
+                    )
+                    freevar_bindings = ast.parse(
+                        "\n".join(f"{var} = 'HOT_RESTART_UNPATCHED_CLOSURE'"
+                                  for var in self.free_vars)
+                    ).body
+                    res = (
+                        freevar_bindings
+                        + [
+                            self.target_nodes[-1]
+                            # If the original function was explicitly wrapped, the
+                            # wrapper will set HOT_RESTART_SURROGATE_RESULT,
+                            # otherwise generate some code here to set it.
+                        ]
+                        + ast.parse(
+                            f"globals().setdefault('HOT_RESTART_SURROGATE_RESULT', {node.name})"
+                        ).body
+                    )
                     return res
                 else:
                     # This is not the leaf function.
@@ -211,17 +227,17 @@ class SurrogateTransformer:
             return []
 
 
-def build_surrogate_source(module_ast, def_path):
+def build_surrogate_source(module_ast, def_path, free_vars):
     """Builds a source file containing the definition of def_path at the same
     lineno as in the ast, with the same parent class(es), but with all other
     lines empty.
     """
-    trans = SurrogateTransformer(target_path=def_path)
+    trans = SurrogateTransformer(target_path=def_path, free_vars=free_vars)
     new_ast = ast.fix_missing_locations(trans.flatten_module(module_ast))
     # _LOGGER.debug(ast.dump(new_ast, indent=2))
     source = ast.unparse(new_ast)
     target_nodes = trans.target_nodes
-    def_path_str = '.'.join(def_path)
+    def_path_str = ".".join(def_path)
     if len(target_nodes) == 0:
         raise ReloadException(f"Could not find {def_path_str} in new source")
     if len(target_nodes) > 1:
@@ -232,33 +248,36 @@ def build_surrogate_source(module_ast, def_path):
     surrogate_src = rewrite_super_closures(surrogate_src)
     return surrogate_src
 
+
 HOT_RESTART_SURROGATE_RESULT = "HOT_RESTART_SURROGATE_RESULT"
 HOT_RESTART_IN_SURROGATE_CONTEXT = threading.local()
 HOT_RESTART_IN_SURROGATE_CONTEXT.val = None
 
-ORIGINAL_SOURCE_CACHE = {}
-ORIGINAL_SOURCE_AST_CACHE = {}
+
+@functools.cache
+def parse_src(source: str) -> ast.AST:
+    return ast.parse(source)
 
 
 def get_def_path(func) -> Optional[list[str]]:
-
     unwrapped_func = inspect.unwrap(func)
     if unwrapped_func is not func:
         _LOGGER.debug("Finding def path of wrapped function.")
         try:
-            _LOGGER.debug(f"function {func!r} has source file {inspect.getsourcefile(func)}")
+            _LOGGER.debug(
+                f"function {func!r} has source file {inspect.getsourcefile(func)}"
+            )
         except TypeError:
             _LOGGER.debug(f"function {func!r} has no source file")
 
-        _LOGGER.debug(f"unwrapped function {unwrapped_func!r} has source file {inspect.getsourcefile(unwrapped_func)}")
+        _LOGGER.debug(
+            f"unwrapped function {unwrapped_func!r} has source file {inspect.getsourcefile(unwrapped_func)}"
+        )
 
     source_filename = inspect.getsourcefile(unwrapped_func)
-    if source_filename not in ORIGINAL_SOURCE_AST_CACHE:
-        with open(source_filename, "r") as f:
-            content = f.read()
-            ORIGINAL_SOURCE_CACHE[source_filename] = content
-            ORIGINAL_SOURCE_AST_CACHE[source_filename] = ast.parse(content)
-    module_ast = ORIGINAL_SOURCE_AST_CACHE[source_filename]
+    with open(source_filename, "r") as f:
+        source_content = f.read()
+    module_ast = parse_src(source_content)
     func_name = unwrapped_func.__name__
     func_lineno = unwrapped_func.__code__.co_firstlineno
     visitor = FindDefPath(target_name=func_name, target_lineno=func_lineno)
@@ -269,7 +288,7 @@ def get_def_path(func) -> Optional[list[str]]:
         return None
     def_path = visitor.found_def_paths[0]
     # Check that we can build a surrogate source for this func
-    build_surrogate_source(module_ast, def_path)
+    build_surrogate_source(module_ast, def_path, unwrapped_func.__code__.co_freevars)
     return visitor.found_def_paths[0]
 
 
@@ -282,12 +301,16 @@ def reload_function(def_path: list[str], func):
     """
 
     def_str = ".".join(def_path)
-    source_filename = inspect.getsourcefile(inspect.unwrap(func))
+    unwrapped_func = inspect.unwrap(func)
+    source_filename = inspect.getsourcefile(unwrapped_func)
+    _LOGGER.debug(f"Reloading {def_str} from {source_filename}")
     try:
         with open(source_filename, "r") as f:
             all_source = f.read()
     except (OSError, FileNotFoundError, tokenize.TokenError) as e:
-        _LOGGER.error(f"Could not read source for {func!r} from {source_filename}: {e!r}")
+        _LOGGER.error(
+            f"Could not read source for {func!r} from {source_filename}: {e!r}"
+        )
         return None
     try:
         src_ast = ast.parse(all_source, filename=source_filename)
@@ -301,7 +324,9 @@ def reload_function(def_path: list[str], func):
         # we don't know how to get source code from.
         _LOGGER.error(f"Could not reload {func!r}: No known source file")
         return None
-    surrogate_src = build_surrogate_source(src_ast, def_path)
+    surrogate_src = build_surrogate_source(
+        src_ast, def_path, unwrapped_func.__code__.co_freevars
+    )
 
     # Create a "flattened filename" to use as a temp file suffix.
     # This way we avoid needing to clean up any temporary directories.
@@ -338,12 +363,16 @@ def reload_function(def_path: list[str], func):
             func.__globals__,
             raw_func.__name__,
             raw_func.__defaults__,
-            # TODO(krzentner): Match up cell names, instead of blindly copying __closure__
+            # If the new source "closes over" new variables, then those will
+            # turn into confusing "global not defined" messages.
+            # TODO(krzentner): Find a way to print a good error message in this case.
             func.__closure__,
         )
     else:
         # We already warn about this on wrap, no need to repeat on reload
-        _LOGGER.debug("wrap was not innermost decorator of {def_str}, closures (e.g. super()) will not work")
+        _LOGGER.debug(
+            f"wrap was not innermost decorator of {def_str}, closures will not work"
+        )
         new_func = raw_func
     # Keep new temp file alive until function is reloaded again
     TMP_SOURCE_FILES[def_str] = temp_source
@@ -383,20 +412,18 @@ def wrap(
         )
 
     if HOT_RESTART_IN_SURROGATE_CONTEXT.val:
+        # We're in surrogate source, don't wrap again (or override the FUNC_BASE
         HOT_RESTART_IN_SURROGATE_CONTEXT.val[HOT_RESTART_SURROGATE_RESULT] = func
+        return func
 
     if getattr(func, HOT_RESTART_ALREADY_WRAPPED, False):
         _LOGGER.debug(f"Already wrapped {func!r}, not wrapping again")
         return func
 
-    if inspect.unwrap(func) is not func:
-        _LOGGER.warn(f"Wrapping {func!r}, but hot_restart.wrap is not innermost decorator.")
-        _LOGGER.warn(f"Inner decorator will be reloaded with function {func!r}.")
-        _LOGGER.warn(f"Closures in {func!r} (e.g. super()) will not be patched.")
-
     _LOGGER.debug(f"Wrapping {func!r}")
 
     _def_path = get_def_path(func)
+
     if _def_path is None:
         _LOGGER.error(f"Could not get definition path for {func!r}")
         # Assume it's the trivial path
@@ -404,6 +431,15 @@ def wrap(
     else:
         def_path = _def_path
     def_path_str = ".".join([func.__module__] + def_path)
+
+    if inspect.unwrap(func) is not func:
+        _LOGGER.warn(
+            f"Wrapping {def_path_str}, but hot_restart.wrap is not innermost decorator."
+        )
+        _LOGGER.warn(f"Inner decorator {func!r} will be reloaded with function.")
+        _LOGGER.warn(f"Closure values in {def_path_str} will be lost.")
+
+    _LOGGER.debug(f"Adding new base {def_path_str}: {func!r}")
     FUNC_BASE[def_path_str] = func
     FUNC_NOW[def_path_str] = func
 
@@ -505,6 +541,7 @@ HOT_RESTART_MODULE_RELOAD_CONTEXT.val = {}
 IS_RESTARTING_MODULE = threading.local()
 IS_RESTARTING_MODULE.val = False
 
+
 def is_restarting_module():
     return IS_RESTARTING_MODULE.val
 
@@ -564,9 +601,6 @@ def restart_module(module_or_name=None):
     # If you need to avoid it, just use the two argument form of super() manually
     source = rewrite_super_closures(source)
 
-    ORIGINAL_SOURCE_CACHE[source_filename] = source
-    ORIGINAL_SOURCE_AST_CACHE[source_filename] = ast.parse(source)
-
     _LOGGER.info(f"Reloading module {module!r} from source file {source_filename}")
     _LOGGER.debug("=== RELOAD SOURCE BEGIN ===")
     _LOGGER.debug(source)
@@ -586,6 +620,7 @@ def restart_module(module_or_name=None):
 
     for k, v in ctxt.items():
         setattr(module, k, v)
+
 
 # Convenient alias
 reload_module = restart_module
