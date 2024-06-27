@@ -2,6 +2,13 @@ Restart debugging your program in the function that failed.
 
 Minimal hot-reload-and-restart library.
 
+Currently has no dependencies outside the standard library.
+
+Installation:
+```
+pip install hot_restart
+```
+
 ## Usage:
 
 Wrap any function you expect to crash in `@hot_restart.wrap`:
