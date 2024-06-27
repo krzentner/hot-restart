@@ -7,7 +7,7 @@ import hot_restart; hot_restart.wrap_module()
 See README.md for more detailed usage instructions.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 import threading
 import sys
@@ -453,7 +453,11 @@ def wrap(
 
     _LOGGER.debug(f"Wrapping {func!r}")
 
-    _def_path = get_def_path(func)
+    try:
+        _def_path = get_def_path(func)
+    except (FileNotFoundError, OSError) as e:
+        _LOGGER.error(f"Could not wrap {func!r}: could not get source: {e}")
+        return func
 
     if _def_path is None:
         _LOGGER.error(f"Could not get definition path for {func!r}")
@@ -562,8 +566,11 @@ def no_wrap(func_or_class):
 
 
 def wrap_class(cls):
-    for k, v in inspect.getmembers(cls, predicate=inspect.isfunction):
-        setattr(cls, k, wrap(v))
+    _LOGGER.info(f"Wrapping class: {cls!r}")
+    for k, v in list(vars(cls).items()):
+        if callable(v):
+            _LOGGER.info(f"Wrapping {cls!r}.{k}")
+            setattr(cls, k, wrap(v))
 
 
 HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
@@ -598,13 +605,25 @@ def wrap_module(module_or_name=None):
         elif getattr(v, HOT_RESTART_ALREADY_WRAPPED, False):
             _LOGGER.info(f"Skipping already wrapped {v!r}")
         elif inspect.isclass(v):
-            _LOGGER.info(f"Wrapping class {v!r}")
-            wrap_class(v)
+            v_module = inspect.getmodule(v)
+            if v_module and v_module.__name__ == module_name:
+                _LOGGER.info(f"Wrapping class {v!r}")
+                wrap_class(v)
+            else:
+                _LOGGER.info(
+                    f"Not wrapping in-scope class {v!r} since it originates from {v_module} != {module_name}"
+                )
         elif callable(v):
-            _LOGGER.info(f"Wrapping callable {v!r}")
-            out_d[k] = wrap(v)
+            v_module = inspect.getmodule(v)
+            if v_module and v_module.__name__ == module_name:
+                _LOGGER.info(f"Wrapping callable {v!r}")
+                out_d[k] = wrap(v)
+            else:
+                _LOGGER.info(
+                    f"Not wrapping in-scope callable {v!r} since it originates from {v_module} != {module_name}"
+                )
         else:
-            _LOGGER.info(f"Not wrapping {v!r}")
+            _LOGGER.debug(f"Not wrapping {v!r}")
 
     for k, v in out_d.items():
         module_d[k] = v
