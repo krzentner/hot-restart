@@ -7,6 +7,7 @@ class Parent:
         return y + 5
 
 
+# extra line
 class Child(Parent):
     def inner(self, y):
         print("in inner")

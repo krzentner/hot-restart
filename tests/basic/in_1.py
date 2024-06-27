@@ -7,6 +7,8 @@ def outer():
     inner(y + 10)
 
 
+# extra
+# lines
 def inner(x):
     assert False, "whoops"
     print("in inner:", x)

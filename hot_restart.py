@@ -7,7 +7,7 @@ import hot_restart; hot_restart.wrap_module()
 See README.md for more detailed usage instructions.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import threading
 import sys
@@ -410,7 +410,7 @@ def reload_function(def_path: list[str], func):
     return new_func
 
 
-SHOULD_HOT_RESTART = True
+RELOAD_ON_CONTINUE = True
 PRINT_HELP_MESSAGE = True
 
 
@@ -540,7 +540,7 @@ def wrap(
 
                 if PROGRAM_SHOULD_EXIT or should_exit_this_level:
                     raise e
-                else:
+                elif RELOAD_ON_CONTINUE:
                     new_func = reload_function(def_path, FUNC_BASE[def_path_str])
                     if new_func is not None:
                         print(f"> Reloaded {new_func!r}")
@@ -672,4 +672,5 @@ __all__ = [
     "restart_module",
     "reload_module",
     "is_restarting_module",
+    "RELOAD_ON_CONTINUE",
 ]

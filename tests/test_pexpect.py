@@ -96,7 +96,7 @@ def test_closure():
     copy(test_dir, "in_1.py", tmp)
     child = pexpect.spawn("python", [tmp.name])
     exp(child, "(Pdb)")
-    assert b"9  ->" in child.before
+    assert b"10  ->" in child.before
     copy(test_dir, "in_2.py", tmp)
     child.sendline("c")
     child.expect("y 2 x 1 test", timeout=0.5)
