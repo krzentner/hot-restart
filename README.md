@@ -4,9 +4,9 @@ Minimal hot-reload-and-restart library.
 
 ## Usage:
 
-Wrap any function you expect to crash in @hot_restart.wrap:
+Wrap any function you expect to crash in `@hot_restart.wrap`:
 
-```
+```python
 import hot_restart
 
 @hot_restart.wrap
