@@ -7,7 +7,7 @@ import hot_restart; hot_restart.wrap_module()
 See README.md for more detailed usage instructions.
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 import threading
 import sys
@@ -48,6 +48,9 @@ if "pydevd" in sys.modules:
     DEBUGGER = "pydevd"
     # Fake the path of generated sources to match the original source
     DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
+elif "pudb" in sys.modules:
+    DEBUGGER = "pudb"
+    DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
 else:
     # Default stdlib wrapper
     DEBUGGER = "pdb"
@@ -78,9 +81,6 @@ EXIT_THIS_FRAME = None
 class HotRestartPdb(pdb.Pdb):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # This flag is used to recursively exit the whole program, instead of
-        # just exiting one post-mortem session.
-        self.program_should_exit = False
 
     def _cmdloop(self) -> None:
         # The only difference vs normal Pdb is that this function does not
@@ -91,8 +91,9 @@ class HotRestartPdb(pdb.Pdb):
         self.allow_kbdint = False
 
     def set_quit(self):
+        global PROGRAM_SHOULD_EXIT
+        PROGRAM_SHOULD_EXIT = True
         super().set_quit()
-        self.program_should_exit = True
 
 
 def exit():
@@ -570,9 +571,20 @@ def _start_post_mortem(def_path_str, excinfo):
         _start_pdb_post_mortem(def_path_str, excinfo)
     elif DEBUGGER == "pydevd":
         _start_pydevd_post_mortem(def_path_str, excinfo)
+    elif DEBUGGER == "pudb":
+        _start_pudb_post_mortem(def_path_str, excinfo)
     else:
         _LOGGER.error(f"Unknown debugger {DEBUGGER}, falling back to breakpoint()")
         breakpoint()
+
+
+def _start_pudb_post_mortem(def_path_str, excinfo):
+    e_type, e, tb = excinfo
+
+    _LOGGER.debug(f"Entering pudb debugging of {def_path_str}")
+    import pudb
+
+    pudb.post_mortem(tb=tb, e_type=e_type, e_value=e)
 
 
 def _start_pydevd_post_mortem(def_path_str, excinfo):
