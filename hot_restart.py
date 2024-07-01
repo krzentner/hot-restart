@@ -333,6 +333,8 @@ def get_def_path(func) -> Optional[list[str]]:
         )
 
     source_filename = inspect.getsourcefile(unwrapped_func)
+    if source_filename == "<string>":
+        raise ReloadException(f"{func!r} was generated and has no source")
     with open(source_filename, "r") as f:
         source_content = f.read()
     module_ast = parse_src(source_content)
@@ -498,6 +500,9 @@ def wrap(
 
     try:
         _def_path = get_def_path(func)
+    except ReloadException as e:
+        _LOGGER.error(f"Could not wrap {func!r}: {e}")
+        return func
     except (FileNotFoundError, OSError) as e:
         _LOGGER.error(f"Could not wrap {func!r}: could not get source: {e}")
         return func
