@@ -7,7 +7,7 @@ import hot_restart; hot_restart.wrap_module()
 See README.md for more detailed usage instructions.
 """
 
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 import threading
 import sys
@@ -31,6 +31,49 @@ handler.setFormatter(formatter)
 _LOGGER.addHandler(handler)
 _LOGGER.setLevel(logging.WARN)
 
+# Global configuration
+
+## Automatically reload code on continue.
+RELOAD_ON_CONTINUE = True
+
+## Print the help message when first opening pdb
+PRINT_HELP_MESSAGE = True
+
+## Causes program to exit.
+PROGRAM_SHOULD_EXIT = False
+
+## Debugger to use
+if "pydevd" in sys.modules:
+    # Handles VSCode, probably others
+    DEBUGGER = "pydevd"
+    # Fake the path of generated sources to match the original source
+    DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
+else:
+    # Default stdlib wrapper
+    DEBUGGER = "pdb"
+    # Show the generated "surrogate" source in the debugger
+    DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
+
+# Magic attribute names added by decorators
+HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"
+HOT_RESTART_NO_WRAP = "_hot_restart_no_wrap"
+
+# Thread locals used during reload
+HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
+HOT_RESTART_MODULE_RELOAD_CONTEXT.val = {}
+
+HOT_RESTART_SURROGATE_RESULT = "HOT_RESTART_SURROGATE_RESULT"
+
+HOT_RESTART_IN_SURROGATE_CONTEXT = threading.local()
+HOT_RESTART_IN_SURROGATE_CONTEXT.val = None
+
+IS_RESTARTING_MODULE = threading.local()
+IS_RESTARTING_MODULE.val = False
+
+# This needs to be settable from the debugger UI
+# Unfortunately we have no idea what thread the debugger will set this from
+EXIT_THIS_FRAME = None
+
 
 class HotRestartPdb(pdb.Pdb):
     def __init__(self, *args, **kwargs):
@@ -52,9 +95,6 @@ class HotRestartPdb(pdb.Pdb):
         self.program_should_exit = True
 
 
-PROGRAM_SHOULD_EXIT = False
-
-
 def exit():
     """It can sometimes be hard to exit hot_restart programs.
     Calling this function (and exiting any debugger sessions) will
@@ -62,6 +102,13 @@ def exit():
     """
     global PROGRAM_SHOULD_EXIT
     PROGRAM_SHOULD_EXIT = True
+
+
+def reraise():
+    """Calling the function will cause the current exception to be
+    re-raised in the current thread when the debuger exits."""
+    global EXIT_THIS_FRAME
+    EXIT_THIS_FRAME = True
 
 
 # Mapping from definition paths to temp files of reloaded code.
@@ -265,11 +312,6 @@ def build_surrogate_source(source_text, module_ast, def_path, free_vars):
     return surrogate_src
 
 
-HOT_RESTART_SURROGATE_RESULT = "HOT_RESTART_SURROGATE_RESULT"
-HOT_RESTART_IN_SURROGATE_CONTEXT = threading.local()
-HOT_RESTART_IN_SURROGATE_CONTEXT.val = None
-
-
 @functools.cache
 def parse_src(source: str) -> ast.AST:
     return ast.parse(source)
@@ -358,7 +400,12 @@ def reload_function(def_path: list[str], func):
     _LOGGER.debug(surrogate_src)
     _LOGGER.debug("=== SURROGATE SOURCE END ===")
 
-    code = compile(surrogate_src, temp_source.name, "exec")
+    surrogate_filename = temp_source.name
+    if DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE:
+        _LOGGER.warn(f"Faking path of generated source for {func!r}")
+        _LOGGER.warn(f"Real generated code source is in {temp_source.name}")
+        surrogate_filename = source_filename
+    code = compile(surrogate_src, surrogate_filename, "exec")
     ctxt = dict(vars(module))
 
     if HOT_RESTART_SURROGATE_RESULT in ctxt:
@@ -408,10 +455,6 @@ def reload_function(def_path: list[str], func):
     # Keep new temp file alive until function is reloaded again
     TMP_SOURCE_FILES[def_str] = temp_source
     return new_func
-
-
-RELOAD_ON_CONTINUE = True
-PRINT_HELP_MESSAGE = True
 
 
 # Mapping from definition path strings to most up-to-date version of those functions
@@ -481,10 +524,10 @@ def wrap(
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
         global PROGRAM_SHOULD_EXIT
-        global PRINT_HELP_MESSAGE
-        should_exit_this_level = False
+        global EXIT_THIS_FRAME
+        EXIT_THIS_FRAME = False
         restart_count = 0
-        while not PROGRAM_SHOULD_EXIT and not should_exit_this_level:
+        while not PROGRAM_SHOULD_EXIT and not EXIT_THIS_FRAME:
             if restart_count > 0:
                 _LOGGER.info(f"Restarting {FUNC_NOW[def_path_str]!r}")
             try:
@@ -499,50 +542,11 @@ def wrap(
                     # The user is probably intentionally exiting
                     PROGRAM_SHOULD_EXIT = True
 
-                if not PROGRAM_SHOULD_EXIT and not should_exit_this_level:
-                    traceback = sys.exc_info()[2]
+                if not PROGRAM_SHOULD_EXIT and not EXIT_THIS_FRAME:
+                    _start_post_mortem(def_path_str, sys.exc_info())
 
-                    # Print basic commands
-                    print(">")
-                    # e_msg = str(e)
-                    e_msg = repr(e)
-                    if not e_msg:
-                        e_msg = repr(e)
-                    print(f"> {def_path_str}: {e_msg}")
-                    if PRINT_HELP_MESSAGE:
-                        print(f"> (c)ontinue to revive {def_path_str}")
-                        print("> Ctrl-C to re-raise exception")
-                        print("> (q)uit to exit program")
-                        PRINT_HELP_MESSAGE = False
-                    print(">")
-                    debugger = HotRestartPdb()
-                    debugger.reset()
-
-                    # Adjust starting frame of debugger to point at wrapped
-                    # function (just below "this" frame).
-                    height = 0
-                    tb_next = traceback.tb_next
-                    while tb_next.tb_next is not None:
-                        height += 1
-                        tb_next = tb_next.tb_next
-
-                    debugger.cmdqueue.extend(["u"] * height)
-
-                    # Show function source
-                    # TODO(krzentner): Use original source, instead of
-                    # re-fetching from file (which may be out of date)
-                    debugger.cmdqueue.append("ll")
-
-                    try:
-                        debugger.interaction(None, traceback)
-                    except KeyboardInterrupt:
-                        # If user input KeyboardInterrupt from the debugger,
-                        # break up one level.
-                        should_exit_this_level = True
-                    if debugger.program_should_exit:
-                        PROGRAM_SHOULD_EXIT = True
-
-                if PROGRAM_SHOULD_EXIT or should_exit_this_level:
+                if PROGRAM_SHOULD_EXIT or EXIT_THIS_FRAME:
+                    _LOGGER.warn(f"Re-raising {e!r}")
                     raise e
                 elif RELOAD_ON_CONTINUE:
                     new_func = reload_function(def_path, FUNC_BASE[def_path_str])
@@ -556,8 +560,80 @@ def wrap(
     return wrapped
 
 
-HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"
-HOT_RESTART_NO_WRAP = "_hot_restart_no_wrap"
+def _start_post_mortem(def_path_str, excinfo):
+    if DEBUGGER == "pdb":
+        _start_pdb_post_mortem(def_path_str, excinfo)
+    elif DEBUGGER == "pydevd":
+        _start_pydevd_post_mortem(def_path_str, excinfo)
+    else:
+        _LOGGER.error(f"Unknown debugger {DEBUGGER}, falling back to breakpoint()")
+        breakpoint()
+
+
+def _start_pydevd_post_mortem(def_path_str, excinfo):
+    print(f"hot-restart: Continue to revive {def_path_str}", file=sys.stderr)
+    print(
+        f"hot-restart: call hot_restart.reraise() and continue to continue raising exception",
+        file=sys.stderr,
+    )
+    try:
+        import pydevd
+    except ImportError:
+        breakpoint()
+
+    py_db = pydevd.get_global_debugger()
+    if py_db is None:
+        breakpoint()
+    thread = threading.current_thread()
+    additional_info = py_db.set_additional_thread_info(thread)
+    additional_info.is_tracing += 1
+    try:
+        py_db.stop_on_unhandled_exception(py_db, thread, additional_info, excinfo)
+    finally:
+        additional_info.is_tracing -= 1
+
+
+def _start_pdb_post_mortem(def_path_str, excinfo):
+    global PRINT_HELP_MESSAGE
+    global EXIT_THIS_FRAME
+    _, e, tb = excinfo
+    # Print basic commands
+    print(">")
+    # e_msg = str(e)
+    e_msg = repr(e)
+    if not e_msg:
+        e_msg = repr(e)
+    print(f"> {def_path_str}: {e_msg}")
+    if PRINT_HELP_MESSAGE:
+        print(f"> (c)ontinue to revive {def_path_str}")
+        print("> Ctrl-C to re-raise exception")
+        print("> (q)uit to exit program")
+        PRINT_HELP_MESSAGE = False
+    print(">")
+    debugger = HotRestartPdb()
+    debugger.reset()
+
+    # Adjust starting frame of debugger to point at wrapped
+    # function (just below wrapper frame).
+    height = 0
+    tb_next = tb.tb_next
+    while tb_next.tb_next is not None:
+        height += 1
+        tb_next = tb_next.tb_next
+
+    debugger.cmdqueue.extend(["u"] * height)
+
+    # Show function source
+    # TODO(krzentner): Use original source, instead of
+    # re-fetching from file (which may be out of date)
+    debugger.cmdqueue.append("ll")
+
+    try:
+        debugger.interaction(None, tb)
+    except KeyboardInterrupt:
+        # If user input KeyboardInterrupt from the debugger,
+        # break up one level.
+        EXIT_THIS_FRAME = True
 
 
 def no_wrap(func_or_class):
@@ -571,13 +647,6 @@ def wrap_class(cls):
         if callable(v):
             _LOGGER.info(f"Wrapping {cls!r}.{k}")
             setattr(cls, k, wrap(v))
-
-
-HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
-HOT_RESTART_MODULE_RELOAD_CONTEXT.val = {}
-
-IS_RESTARTING_MODULE = threading.local()
-IS_RESTARTING_MODULE.val = False
 
 
 def is_restarting_module():
@@ -685,6 +754,7 @@ __all__ = [
     "wrap_module",
     "wrap_class",
     "exit",
+    "reraise",
     "PROGRAM_SHOULD_EXIT",
     "PRINT_HELP_MESSAGE",
     "ReloadException",

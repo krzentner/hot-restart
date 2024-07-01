@@ -26,7 +26,7 @@ class Parent:
 
 
 class Inner(Parent):
-    def inner(self, y_inner, k="test"):
+    def inner(self, y_inner, k='test'):
         super().inner()
         print(self)
         print("in inner")
@@ -58,4 +58,4 @@ def outer_fn():
 
 hot_restart.wrap_module()
 if not hot_restart.is_restarting_module():
-    outer_fn()
+    Inner().inner(10)

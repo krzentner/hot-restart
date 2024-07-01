@@ -1,13 +1,15 @@
+# `hot_restart`
+
 Restart debugging your program in the function that failed.
-
-Minimal hot-reload-and-restart library.
-
-Currently has no dependencies outside the standard library.
 
 Installation:
 ```
 pip install hot_restart
 ```
+
+`hot_restart` currently has no required dependencies outside the standard library.
+If `pydevd` is already imported, `hot_restart` will use it to allow debugging
+in VS Code (and other IDEs using `pydevd` / `debugpy`).
 
 ## Usage:
 

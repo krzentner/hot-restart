@@ -1,3 +1,4 @@
 flit
 pexpect
 pytest
+ruff
