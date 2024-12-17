@@ -47,7 +47,7 @@ def outer_fn():
     @hot_restart.wrap
     @functools.cache
     def inner_fn(s):
-        # assert False
+        assert False
         print("y", y)
         print("x", x)
         print(s)
@@ -58,4 +58,5 @@ def outer_fn():
 
 hot_restart.wrap_module()
 if not hot_restart.is_restarting_module():
+    # outer_fn()
     Inner().inner(10)
