@@ -20,7 +20,7 @@ import tempfile
 import ast
 from typing import Any, Optional
 import types
-import re
+
 
 old_except_hook = None
 
@@ -201,7 +201,10 @@ class SuperRewriteTransformer(ast.NodeTransformer):
     def visit_Call(self, node: ast.Call):
         if getattr(node.func, "id", None) == "super" and len(node.args) == 0:
             try:
-                node.args = [ast.Name(self.class_name_stack[-1]), ast.Name(self.first_arg_stack[-1])]
+                node.args = [
+                    ast.Name(self.class_name_stack[-1]),
+                    ast.Name(self.first_arg_stack[-1]),
+                ]
             except IndexError:
                 _LOGGER.error(f"Could not rewrite super() call at line {node.lineno}")
         self.generic_visit(node)
@@ -590,7 +593,14 @@ def wrap(
                     PROGRAM_SHOULD_EXIT = True
 
                 if not PROGRAM_SHOULD_EXIT and not EXIT_THIS_FRAME:
-                    _start_post_mortem(def_path_str, sys.exc_info())
+                    excinfo = sys.exc_info()
+
+                    new_tb, num_dead_frames = _create_undead_traceback(
+                        excinfo[2], sys._getframe(1)
+                    )
+                    excinfo = (excinfo[0], excinfo[1], new_tb)
+
+                    _start_post_mortem(def_path_str, excinfo, num_dead_frames)
 
                 if PROGRAM_SHOULD_EXIT or EXIT_THIS_FRAME:
                     _LOGGER.warn(f"Re-raising {e!r}")
@@ -608,9 +618,33 @@ def wrap(
     return wrapped
 
 
-def _start_post_mortem(def_path_str, excinfo):
+def _create_undead_traceback(exc_tb, current_frame):
+    """Create a new traceback object that includes the current frame's parents."""
+    num_dead_frames = 0
+    dead_tb = exc_tb.tb_next
+    while dead_tb.tb_next is not None:
+        num_dead_frames += 1
+        dead_tb = dead_tb.tb_next
+
+    frame = current_frame
+
+    # Create new traceback objects
+    prev_tb = exc_tb
+    while frame:
+        prev_tb = types.TracebackType(
+            tb_next=prev_tb,
+            tb_frame=frame,
+            tb_lasti=frame.f_lasti,
+            tb_lineno=frame.f_lineno,
+        )
+        frame = frame.f_back
+
+    return prev_tb, num_dead_frames
+
+
+def _start_post_mortem(def_path_str, excinfo, num_dead_frames):
     if DEBUGGER == "pdb":
-        _start_pdb_post_mortem(def_path_str, excinfo)
+        _start_pdb_post_mortem(def_path_str, excinfo, num_dead_frames)
     elif DEBUGGER == "pydevd":
         _start_pydevd_post_mortem(def_path_str, excinfo)
     elif DEBUGGER == "pudb":
@@ -653,7 +687,7 @@ def _start_pydevd_post_mortem(def_path_str, excinfo):
             additional_info.is_tracing -= 1
 
 
-def _start_pdb_post_mortem(def_path_str, excinfo):
+def _start_pdb_post_mortem(def_path_str, excinfo, num_dead_frames):
     global PRINT_HELP_MESSAGE
     global EXIT_THIS_FRAME
     _, e, tb = excinfo
@@ -673,15 +707,7 @@ def _start_pdb_post_mortem(def_path_str, excinfo):
     debugger = HotRestartPdb()
     debugger.reset()
 
-    # Adjust starting frame of debugger to point at wrapped
-    # function (just below wrapper frame).
-    height = 0
-    tb_next = tb.tb_next
-    while tb_next.tb_next is not None:
-        height += 1
-        tb_next = tb_next.tb_next
-
-    debugger.cmdqueue.extend(["u"] * height)
+    debugger.cmdqueue.extend(["u"] * num_dead_frames)
 
     # Show function source
     # TODO(krzentner): Use original source, instead of
@@ -719,7 +745,7 @@ def is_restarting_module():
 def wrap_module(module_or_name=None):
     if module_or_name is None:
         # Need to go get module of calling frame
-        module_or_name = inspect.currentframe().f_back.f_globals["__name__"]
+        module_or_name = sys._getframe(1).f_globals["__name__"]
         module_name = module_or_name
     if isinstance(module_or_name, str):
         module_name = module_or_name
@@ -731,7 +757,7 @@ def wrap_module(module_or_name=None):
     _LOGGER.info(f"Wrapping module {module_name!r}")
 
     out_d = {}
-    for k, v in module_d.items():
+    for k, v in list(module_d.items()):
         if getattr(v, HOT_RESTART_NO_WRAP, False):
             _LOGGER.info(f"Skipping wrapping of no_wrap {v!r}")
         elif getattr(v, HOT_RESTART_ALREADY_WRAPPED, False):
@@ -764,7 +790,7 @@ def wrap_module(module_or_name=None):
 def restart_module(module_or_name=None):
     if module_or_name is None:
         # Need to go get module of calling frame
-        module_or_name = inspect.currentframe().f_back.f_globals["__name__"]
+        module_or_name = sys._getframe(1).f_globals["__name__"]
         module_name = module_or_name
     if isinstance(module_or_name, str):
         module = sys.modules[module_or_name]
