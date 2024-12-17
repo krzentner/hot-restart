@@ -512,7 +512,7 @@ FUNC_BASE = {}
 def wrap(
     func=None,
     *,
-    propagated_exceptions: tuple[type[Exception], ...] = (),
+    propagated_exceptions: tuple[type[Exception], ...] = (StopIteration,),
     propagate_keyboard_interrupt: bool = True,
 ):
     if inspect.isclass(func):
