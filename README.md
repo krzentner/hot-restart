@@ -40,6 +40,9 @@ Then you can modify the source code of your crashing function, and (c)ontinue
 from the debugger, and hot_restart will reload the source of that function (and
 only that function).
 
+You can use `@hot_restart.no_wrap` to indicate that a function or class should
+not be wrapped.
+
 `hot_restart` uses AST transformations to find new definitions, to avoid
 causing "import-time" side effects, and to match line numbers with the real
 source code while keeping each version of a function (except the initial load)

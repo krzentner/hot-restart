@@ -701,6 +701,9 @@ def no_wrap(func_or_class):
     return func_or_class
 
 
+ignore = no_wrap
+
+
 def wrap_class(cls):
     _LOGGER.info(f"Wrapping class: {cls!r}")
     for k, v in list(vars(cls).items()):
