@@ -57,15 +57,21 @@ patch the byte-code of functions.
 This limits `hot_restart` from handling adding new variables to a closure or
 adding methods to existing class instances, but simplifies the implementation.
 
+### Line numbers and Surrogate Sources
+`hot_restart` generates a surrogate source file to compile.
+This avoids import-time side effects on reload, but means that line numbers may
+become slightly different than the source on disk.
+When using pdb, by default the source of the reloaded file will be set to the surrogate source file, ensuring that line numbers in pdb match the executed code.
+In other debuggers (or when `hot_restart.DEBUG_ORIGINAL_PATH_RELOADED_CODE` is
+True), the original source will be used.
+This may result in line numbers in the executed code not matching line numbers in the debugger.
+
 ### `super()` Calls
 
-hot_restart rewrites `super()` into `super(type(self, self)` in reloaded source
-(original source is loaded intact). This prevents methods from acquiring a
-closure variable `__class__`, which would break in many cases, but this
-re-write can fail if `self` is not defined where `super()` is used. This
-restriction may be removed in the future.
-
-To work around this, you can use the two-argument form of `super()` manually.
+hot_restart rewrites `super()` into `super(<classname>, <first argument>)` in
+reloaded source (original source is loaded intact). This prevents methods from
+acquiring a closure variable `__class__`, which would break in many cases, but
+slightly changes lookup behavior if the class is redefined.
 
 ### Closures and Nested Functions
 

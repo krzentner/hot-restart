@@ -7,7 +7,7 @@ import hot_restart; hot_restart.wrap_module()
 See README.md for more detailed usage instructions.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 import threading
 import sys
@@ -125,13 +125,6 @@ class ReloadException(ValueError):
     pass
 
 
-SUPER_REWRITE_RE = re.compile(r"super\((\s*)\)")
-
-
-def rewrite_super_closures(src):
-    return SUPER_REWRITE_RE.sub(r"super(type(self), self\1)", src)
-
-
 class FindDefPath(ast.NodeVisitor):
     """Given a target name and line number of a definition, find a definition path.
 
@@ -168,6 +161,51 @@ class FindDefPath(ast.NodeVisitor):
             return res
         else:
             return super().generic_visit(node)
+
+
+class SuperRewriteTransformer(ast.NodeTransformer):
+    """
+    Rewrite super() -> super(<classname>, <first argument>)
+    This ensures that adding a super() call does not result in a new closure,
+    but instead a (probably global) lookup of the classname.
+    This solves more problems than it causes (it causes a minor source
+    mismatch, but allows adding new calls to super() in non-nested classes).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.class_name_stack = []
+        self.first_arg_stack = []
+
+    def visit_ClassDef(self, node: ast.ClassDef):
+        self.class_name_stack.append(node.name)
+        try:
+            self.generic_visit(node)
+        finally:
+            self.class_name_stack.pop()
+        return node
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        saved_arg = False
+        if len(node.args.args) >= 1:
+            saved_arg = True
+            self.first_arg_stack.append(node.args.args[0].arg)
+
+        try:
+            self.generic_visit(node)
+        finally:
+            if saved_arg:
+                self.first_arg_stack.pop()
+        return node
+
+    def visit_Call(self, node: ast.Call):
+        if getattr(node.func, "id", None) == "super" and len(node.args) == 0:
+            try:
+                node.args = [ast.Name(self.class_name_stack[-1]), ast.Name(self.first_arg_stack[-1])]
+            except IndexError:
+                _LOGGER.error(f"Could not rewrite super() call at line {node.lineno}")
+        self.generic_visit(node)
+        return node
 
 
 class SurrogateTransformer:
@@ -293,23 +331,23 @@ def build_surrogate_source(source_text, module_ast, def_path, free_vars):
     lineno as in the ast, with the same parent class(es), but with all other
     lines empty.
     """
+    SuperRewriteTransformer().visit(module_ast)
     trans = SurrogateTransformer(target_path=def_path, free_vars=free_vars)
     new_ast = ast.fix_missing_locations(trans.flatten_module(module_ast))
     source = ast.unparse(new_ast)
     target_nodes = trans.target_nodes
     def_path_str = ".".join(def_path)
     if len(target_nodes) == 0:
-        _LOGGER.debug("=== BEGIN SOURCE TEXT ===")
-        _LOGGER.debug(source_text)
-        _LOGGER.debug("=== END SOURCE TEXT ===")
-        _LOGGER.debug(ast.dump(new_ast, indent=2))
+        _LOGGER.error("=== BEGIN SOURCE TEXT ===")
+        _LOGGER.error(source_text)
+        _LOGGER.error("=== END SOURCE TEXT ===")
+        _LOGGER.error(ast.dump(new_ast, indent=2))
         raise ReloadException(f"Could not find {def_path_str} in new source")
     if len(target_nodes) > 1:
         _LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
     target_node = target_nodes[0]
     missing_lines = trans.original_lineno - target_node.lineno
     surrogate_src = "\n" * missing_lines + source
-    surrogate_src = rewrite_super_closures(surrogate_src)
     return surrogate_src
 
 
@@ -334,7 +372,7 @@ def get_def_path(func) -> Optional[list[str]]:
         )
 
     source_filename = inspect.getsourcefile(unwrapped_func)
-    if source_filename == "<string>":
+    if source_filename == "<string>" or source_filename is None:
         raise ReloadException(f"{func!r} was generated and has no source")
     with open(source_filename, "r") as f:
         source_content = f.read()
@@ -387,9 +425,12 @@ def reload_function(def_path: list[str], func):
         # we don't know how to get source code from.
         _LOGGER.error(f"Could not reload {func!r}: No known source file")
         return None
-    surrogate_src = build_surrogate_source(
-        all_source, src_ast, def_path, unwrapped_func.__code__.co_freevars
-    )
+    try:
+        surrogate_src = build_surrogate_source(
+            all_source, src_ast, def_path, unwrapped_func.__code__.co_freevars
+        )
+    except ReloadException:
+        return None
 
     # Create a "flattened filename" to use as a temp file suffix.
     # This way we avoid needing to clean up any temporary directories.
@@ -553,6 +594,7 @@ def wrap(
 
                 if PROGRAM_SHOULD_EXIT or EXIT_THIS_FRAME:
                     _LOGGER.warn(f"Re-raising {e!r}")
+                    EXIT_THIS_FRAME = False
                     raise e
                 elif RELOAD_ON_CONTINUE:
                     new_func = reload_function(def_path, FUNC_BASE[def_path_str])
@@ -601,13 +643,14 @@ def _start_pydevd_post_mortem(def_path_str, excinfo):
     py_db = pydevd.get_global_debugger()
     if py_db is None:
         breakpoint()
-    thread = threading.current_thread()
-    additional_info = py_db.set_additional_thread_info(thread)
-    additional_info.is_tracing += 1
-    try:
-        py_db.stop_on_unhandled_exception(py_db, thread, additional_info, excinfo)
-    finally:
-        additional_info.is_tracing -= 1
+    else:
+        thread = threading.current_thread()
+        additional_info = py_db.set_additional_thread_info(thread)
+        additional_info.is_tracing += 1
+        try:
+            py_db.stop_on_unhandled_exception(py_db, thread, additional_info, excinfo)
+        finally:
+            additional_info.is_tracing -= 1
 
 
 def _start_pdb_post_mortem(def_path_str, excinfo):
@@ -734,11 +777,6 @@ def restart_module(module_or_name=None):
             source = f.read()
     except (OSError, FileNotFoundError) as e:
         raise ReloadException(f"Could not load {module!r} source: {e!r}")
-
-    # Rewrite super() -> super(type(self), self)
-    # This fixes more problems than it causes.
-    # If you need to avoid it, just use the two argument form of super() manually
-    source = rewrite_super_closures(source)
 
     _LOGGER.info(f"Reloading module {module!r} from source file {source_filename}")
     _LOGGER.debug("=== RELOAD SOURCE BEGIN ===")
