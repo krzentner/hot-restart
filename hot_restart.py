@@ -7,7 +7,7 @@ import hot_restart; hot_restart.wrap_module()
 See README.md for more detailed usage instructions.
 """
 
-__version__ = "0.2.2"
+__version__ = "0.2.3"
 
 import threading
 import sys
