@@ -13,7 +13,26 @@ in VS Code (and other IDEs using `pydevd` / `debugpy`).
 
 ## Usage:
 
-Wrap any function you expect to crash in `@hot_restart.wrap`:
+Call `hot_restart.wrap_module()` at the end of a module where you expect
+functions to crash:
+
+```python
+import hot_restart
+
+def my_func():
+    ...
+
+class MyClass:
+
+    def forward(self, x):
+        super().forward(x * 2)
+
+# Must be called after definitions
+hot_restart.wrap_module()
+```
+
+
+The above is equivalent to wrapping each function and class defined in the module:
 
 ```python
 import hot_restart
@@ -29,12 +48,9 @@ class MyClass:
         super().forward(x * 2)
 ```
 
-Alternatively, call `hot_restart.wrap_module()` after your functions and
-classes are defined.
-
-When a wrapped function crashes, hot_restart will open a post mortem debugger
-in the wrapped function, with the rest of the stack still live above that
-function call.
+When a wrapped function crashes (by default, throws any exception besides
+`StopIteration`), hot_restart will open a post mortem debugger in the wrapped
+function, with the rest of the stack still live above that function call.
 
 Then you can modify the source code of your crashing function, and (c)ontinue
 from the debugger, and hot_restart will reload the source of that function (and
@@ -64,10 +80,11 @@ adding methods to existing class instances, but simplifies the implementation.
 `hot_restart` generates a surrogate source file to compile.
 This avoids import-time side effects on reload, but means that line numbers may
 become slightly different than the source on disk.
-When using pdb, by default the source of the reloaded file will be set to the surrogate source file, ensuring that line numbers in pdb match the executed code.
-In other debuggers (or when `hot_restart.DEBUG_ORIGINAL_PATH_RELOADED_CODE` is
-True), the original source will be used.
-This may result in line numbers in the executed code not matching line numbers in the debugger.
+When using pdb, by default the source of the reloaded file will be set to the
+surrogate source file, ensuring that line numbers in pdb match the executed
+code. In other debuggers (or when
+`hot_restart.DEBUG_ORIGINAL_PATH_RELOADED_CODE` is True), the original source
+will be used.
 
 ### `super()` Calls
 
@@ -104,7 +121,9 @@ hot_restart.RELOAD_ON_CONTINUE = False
 ```
 
 This module implements a workflow similar to "edit-and-continue".
-If you're looking for a more maximalist implementation of this workflow with IDE integration, you may be interested in [Reloadium](https://reloadium.io/).
+If you're looking for a more maximalist implementation of this workflow with
+IDE integration, you may be interested in
+[Reloadium](https://github.com/reloadware/reloadium).
 
 Although these useful alternatives exist, I created `hot_restart` because
 I found it difficult to debug failures in those systems.
