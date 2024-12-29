@@ -83,12 +83,7 @@ class HotRestartPdb(pdb.Pdb):
         super().__init__(*args, **kwargs)
 
     def _cmdloop(self) -> None:
-        # The only difference vs normal Pdb is that this function does not
-        # catch KeyboardInterrupt. This allows Ctrl-C to "jump up one level of
-        # the stack", instead of clearing the current line.
-        self.allow_kbdint = True
         self.cmdloop()
-        self.allow_kbdint = False
 
     def set_quit(self):
         global PROGRAM_SHOULD_EXIT
@@ -117,6 +112,11 @@ def reraise():
 # still show correct code listings even after the files are updated.
 # One source file is allocated per function.
 TMP_SOURCE_FILES = {}
+
+# Mapping from surrogate source filenames to original filenames
+# Used to find the original source in cases of reloading an nested inner
+# function after the outer function has been reloaded
+TMP_SOURCE_ORIGINAL_MAP = {}
 
 
 class ReloadException(ValueError):
@@ -407,6 +407,7 @@ def reload_function(def_path: list[str], func):
     def_str = ".".join(def_path)
     unwrapped_func = inspect.unwrap(func)
     source_filename = inspect.getsourcefile(unwrapped_func)
+    source_filename = TMP_SOURCE_ORIGINAL_MAP.get(source_filename, source_filename)
     _LOGGER.debug(f"Reloading {def_str} from {source_filename}")
     try:
         with open(source_filename, "r") as f:
@@ -501,6 +502,7 @@ def reload_function(def_path: list[str], func):
         new_func = raw_func
     # Keep new temp file alive until function is reloaded again
     TMP_SOURCE_FILES[def_str] = temp_source
+    TMP_SOURCE_ORIGINAL_MAP[temp_source.name] = source_filename
     return new_func
 
 

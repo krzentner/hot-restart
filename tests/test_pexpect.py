@@ -101,10 +101,25 @@ def test_closure():
     child.sendline("c")
     child.expect("y 2 x 1 test", timeout=0.5)
 
+def test_nested_functions():
+    test_dir = "nested_functions"
+    tmp = mktmp(test_dir)
+    copy(test_dir, "in_1.py", tmp)
+    child = pexpect.spawn("python", [tmp.name])
+    exp(child, "(Pdb)")
+    assert b"8  ->" in child.before
+    # Send ctrl-c
+    child.send('\003')
+    assert b"8  ->" in child.before
+    copy(test_dir, "in_2.py", tmp)
+    child.sendline("c")
+    child.expect("hi", timeout=0.5)
+
 
 if __name__ == "__main__":
-    # test_basic()
-    # test_basic_twice()
+    test_basic()
+    test_basic_twice()
     test_basic_reload_module()
-    # test_child_class()
-    # test_closure()
+    test_child_class()
+    test_closure()
+    test_nested_functions()
