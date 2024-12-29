@@ -31,7 +31,7 @@ class Inner(Parent):
         print(self)
         print("in inner")
         z = y_inner**2
-        mini()
+        # mini()
         k.append(z)
         return z**2, k
 
@@ -46,17 +46,21 @@ def outer_fn():
 
     @hot_restart.wrap
     @functools.cache
-    def inner_fn(s):
-        assert False
+    def inner_fn(s, y):
+        # assert False
         print("y", y)
         print("x", x)
         print(s)
 
-    inner_fn("test")
-    inner_fn("test")
+    inner_fn("test", 1)
+    inner_fn("test", 2)
+
+@hot_restart.wrap
+def main():
+    # Inner().inner(10)
+    outer_fn()
 
 
 hot_restart.wrap_module()
 if not hot_restart.is_restarting_module():
-    # outer_fn()
-    Inner().inner(10)
+    main()

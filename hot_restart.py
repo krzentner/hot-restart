@@ -598,7 +598,7 @@ def wrap(
                     excinfo = sys.exc_info()
 
                     new_tb, num_dead_frames = _create_undead_traceback(
-                        excinfo[2], sys._getframe(1)
+                        excinfo[2], sys._getframe(1), wrapped
                     )
                     excinfo = (excinfo[0], excinfo[1], new_tb)
 
@@ -620,25 +620,35 @@ def wrap(
     return wrapped
 
 
-def _create_undead_traceback(exc_tb, current_frame):
+def _create_undead_traceback(exc_tb, current_frame, wrapper_function):
     """Create a new traceback object that includes the current frame's parents."""
-    num_dead_frames = 0
-    dead_tb = exc_tb.tb_next
-    while dead_tb.tb_next is not None:
+
+    # We want to default to one frame below the last one (the frame of the wrapper)
+    num_dead_frames = -1
+    dead_tb = exc_tb
+    while dead_tb is not None and dead_tb.tb_next is not None:
         num_dead_frames += 1
         dead_tb = dead_tb.tb_next
+    num_dead_frames = max(0, num_dead_frames)
+
+    # If we would end up in the frame of the wrapper, jump up one more frame to
+    # provide a more useful context
+    if dead_tb is not None and dead_tb.tb_frame.f_code == wrapper_function.__code__:
+        num_dead_frames += 1
+        _LOGGER.warning("Debug frame is offset from restart frame")
 
     frame = current_frame
 
     # Create new traceback objects
     prev_tb = exc_tb
     while frame:
-        prev_tb = types.TracebackType(
-            tb_next=prev_tb,
-            tb_frame=frame,
-            tb_lasti=frame.f_lasti,
-            tb_lineno=frame.f_lineno,
-        )
+        if frame.f_code != wrapper_function.__code__:
+            prev_tb = types.TracebackType(
+                tb_next=prev_tb,
+                tb_frame=frame,
+                tb_lasti=frame.f_lasti,
+                tb_lineno=frame.f_lineno,
+            )
         frame = frame.f_back
 
     return prev_tb, num_dead_frames
