@@ -1,6 +1,5 @@
 import hot_restart
 import functools
-import inspect
 
 
 @hot_restart.wrap
@@ -26,18 +25,21 @@ class Parent:
 
 
 class Inner(Parent):
-    def inner(self, y_inner, k='test'):
+    def inner(self, y_inner, k="test"):
         super().inner()
         print(self)
         print("in inner")
+
+        # hi :)
         z = y_inner**2
-        # mini()
+        mini()
         k.append(z)
         return z**2, k
 
 
 @hot_restart.no_wrap
 def mini():
+    # hi :)
     assert False
 
 
@@ -47,7 +49,7 @@ def outer_fn():
     @hot_restart.wrap
     @functools.cache
     def inner_fn(s, y):
-        # assert False
+        assert False
         print("y", y)
         print("x", x)
         print(s)
@@ -55,9 +57,10 @@ def outer_fn():
     inner_fn("test", 1)
     inner_fn("test", 2)
 
+
 @hot_restart.wrap
 def main():
-    # Inner().inner(10)
+    Inner().inner(10)
     outer_fn()
 
 

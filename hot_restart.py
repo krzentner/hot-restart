@@ -7,7 +7,7 @@ import hot_restart; hot_restart.wrap_module()
 See README.md for more detailed usage instructions.
 """
 
-__version__ = "0.2.3"
+__version__ = "0.2.4"
 
 import threading
 import sys
@@ -20,6 +20,7 @@ import tempfile
 import ast
 from typing import Any, Optional
 import types
+import re
 
 
 old_except_hook = None
@@ -60,6 +61,8 @@ else:
 # Magic attribute names added by decorators
 HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"
 HOT_RESTART_NO_WRAP = "_hot_restart_no_wrap"
+
+CHECK_FOR_SOURCE_ON_LOAD = False
 
 # Thread locals used during reload
 HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
@@ -125,7 +128,7 @@ class ReloadException(ValueError):
     pass
 
 
-class FindDefPath(ast.NodeVisitor):
+class _FindDefPath(ast.NodeVisitor):
     """Given a target name and line number of a definition, find a definition path.
 
     This gives a more durable identity to a function than its original line number.
@@ -163,7 +166,7 @@ class FindDefPath(ast.NodeVisitor):
             return super().generic_visit(node)
 
 
-class SuperRewriteTransformer(ast.NodeTransformer):
+class _SuperRewriteTransformer(ast.NodeTransformer):
     """
     Rewrite super() -> super(<classname>, <first argument>)
     This ensures that adding a super() call does not result in a new closure,
@@ -211,7 +214,7 @@ class SuperRewriteTransformer(ast.NodeTransformer):
         return node
 
 
-class SurrogateTransformer:
+class _SurrogateTransformer(ast.NodeTransformer):
     """Transforms module source ast into a module only containing a target
     function and any surrounding scopes necessary for the compile to build the
     right closure for that target.
@@ -223,143 +226,223 @@ class SurrogateTransformer:
     """
 
     def __init__(self, target_path: list[str], free_vars: list[str]):
+        super().__init__()
         self.target_path = target_path
         self.depth = 0
-        self.target_nodes = []
         self.original_lineno = 0
+        self.original_end_lineno = 0
         self.free_vars = free_vars
 
-    def flatten_module(self, node: ast.Module) -> ast.Module:
+    def visit_Module(self, node: ast.Module) -> ast.Module:
         return ast.Module(
             body=self.visit_body(node.body), type_ignores=node.type_ignores
         )
 
+    def visit_ClassDef(self, node: ast.ClassDef) -> Optional[ast.ClassDef]:
+        if node.name != self.target_path[self.depth]:
+            return None
+
+        self.depth += 1
+        new_body = self.visit_body(node.body)
+        self.depth -= 1
+
+        return ast.ClassDef(
+            name=node.name,
+            bases=[],
+            keywords=node.keywords,
+            body=new_body,
+            decorator_list=[],
+        )
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> Optional[list[ast.AST]]:
+        if node.name != self.target_path[self.depth]:
+            return None
+
+        self.depth += 1
+        if self.depth == len(self.target_path):
+            # Found target function
+            self.original_lineno = node.lineno
+            self.original_end_lineno = node.end_lineno
+
+            # Create closure variable bindings
+            freevar_bindings = ast.parse(
+                "\n".join(
+                    f"{var} = 'HOT_RESTART_LOST_CLOSURE'" for var in self.free_vars
+                )
+            ).body
+
+            # Create function definition
+            func_def = ast.FunctionDef(
+                name=node.name,
+                args=node.args,
+                body=node.body,
+                decorator_list=node.decorator_list,
+                returns=node.returns,
+            )
+
+            # Set result in globals
+            set_result = ast.parse(
+                f"globals().setdefault('HOT_RESTART_SURROGATE_RESULT', {node.name})"
+            ).body
+
+            self.depth -= 1
+            return freevar_bindings + [func_def] + set_result
+        else:
+            # Create stub function for parent scope
+            new_body = self.visit_body(node.body)
+            new_body.append(
+                ast.Return(value=ast.Name(self.target_path[self.depth], ctx=ast.Load()))
+            )
+            stub_func = ast.FunctionDef(
+                name=node.name,
+                args=[],
+                body=new_body,
+                decorator_list=[],
+                returns=node.returns,
+            )
+            self.depth -= 1
+            return [stub_func] + ast.parse(f"{node.name}()").body
+
     def visit_body(self, nodes: list[ast.AST]) -> list[ast.AST]:
         new_nodes = []
-        for n in nodes:
-            new_nodes.extend(self.flatten_visit(n))
+        for node in nodes:
+            result = self.visit(node)
+            if isinstance(result, list):
+                new_nodes.extend(result)
+            elif result is not None:
+                new_nodes.append(result)
         return new_nodes
 
-    def flatten_visit(self, node: ast.AST) -> list[ast.AST]:
-        if isinstance(node, ast.ClassDef):
-            if node.name != self.target_path[self.depth]:
-                return []
-            try:
-                self.depth += 1
-                return [
-                    ast.ClassDef(
-                        name=node.name,
-                        bases=[],
-                        keywords=node.keywords,
-                        body=self.visit_body(node.body),
-                        decorator_list=[],
-                    )
-                ]
-            finally:
-                self.depth -= 1
-        elif isinstance(node, ast.FunctionDef):
-            if node.name != self.target_path[self.depth]:
-                return []
-            try:
-                self.depth += 1
-                if self.depth == len(self.target_path):
-                    self.original_lineno = node.lineno
-                    # Found the function def
-                    self.target_nodes.append(
-                        ast.FunctionDef(
-                            name=node.name,
-                            args=node.args,
-                            body=node.body,
-                            decorator_list=node.decorator_list,
-                            returns=node.returns,
-                        )
-                    )
-                    freevar_bindings = ast.parse(
-                        "\n".join(
-                            f"{var} = 'HOT_RESTART_LOST_CLOSURE'"
-                            for var in self.free_vars
-                        )
-                    ).body
-                    res = (
-                        freevar_bindings
-                        + [
-                            self.target_nodes[-1]
-                            # If the original function was explicitly wrapped, the
-                            # wrapper will set HOT_RESTART_SURROGATE_RESULT,
-                            # otherwise generate some code here to set it.
-                        ]
-                        + ast.parse(
-                            f"globals().setdefault('HOT_RESTART_SURROGATE_RESULT', {node.name})"
-                        ).body
-                    )
-                    return res
-                else:
-                    # This is not the leaf function.
-                    # Transform this function into a stub function that
-                    # just creates the inner function.
+    def generic_visit(self, node: ast.AST) -> Optional[ast.AST]:
+        if hasattr(node, "body") or hasattr(node, "orelse"):
+            body = getattr(node, "body", [])
+            orelse = getattr(node, "orelse", [])
+            return self.visit_body(body + orelse)
+        return None
 
-                    # TODO: Create local variables to match original
-                    # function so that closure bindings are created
-                    # correctly
 
-                    new_body = self.visit_body(node.body)
-                    new_body.append(
-                        ast.Return(
-                            value=ast.Name(self.target_path[self.depth], ctx=ast.Load())
-                        )
-                    )
-                    res = [
-                        ast.FunctionDef(
-                            name=node.name,
-                            args=[],
-                            body=new_body,
-                            decorator_list=[],
-                            returns=node.returns,
-                        ),
-                        # Immediately call the function, so the inner closure gets created
-                    ] + ast.parse(f"{node.name}()").body
-                    return res
+_SUPER_CALL = re.compile(r"super\(([^)]*)\)")
+_EMPTY_SUPER_CALL = re.compile(r"super\(\s*\)")
+
+
+def _merge_sources(
+    *,
+    original_source: str,
+    surrogate_source: str,
+    original_start_lineno: int,
+    original_end_lineno: int,
+    surrogate_start_lineno: int,
+    surrogate_end_lineno: int,
+):
+    """Combine whitespace from original source with other text from non-surrogate source.
+    This is the light-weight alternative to using a concrete syntax tree, that is
+    only sufficient because of the very minimal AST re-writing performed inside of the target function.
+    Namely, it only re-writes zero argument super() calls into the two argument form, and does not re-write any other code.
+    """
+    original_lines = original_source.splitlines()
+    surrogate_lines = surrogate_source.splitlines()
+    original_chars = "\n".join(
+        original_lines[original_start_lineno:original_end_lineno]
+    )
+    surrogate_chars = "\n".join(
+        surrogate_lines[surrogate_start_lineno:surrogate_end_lineno]
+    )
+
+    super_args = _SUPER_CALL.search(surrogate_chars)
+    if super_args is not None:
+        args = super_args.groups(1)[0]
+        replacement = f"super({args})"
+        # Replace every empty super() call with the replacement
+        merged_chars = _EMPTY_SUPER_CALL.sub(replacement, original_chars)
+    else:
+        merged_chars = original_chars
+    missing_line_count = max(0, original_start_lineno - surrogate_start_lineno)
+    merged_text = "\n".join(
+        [
+            "\n" * max(missing_line_count - 1, 0),
+            "\n".join(surrogate_lines[:surrogate_start_lineno]),
+            "".join(merged_chars),
+            "\n".join(surrogate_lines[surrogate_end_lineno:]),
+        ]
+    )
+    return merged_text
+
+
+class LineNoResetter(ast.NodeTransformer):
+    def visit(self, node):
+        node.lineno = None
+        node.end_lineno = None
+        # if hasattr(node, "lineno"):
+        # if hasattr(node, "end_lineno"):
+        return super().visit(node)
+
+
+class FindTargetNode(ast.NodeVisitor):
+    def __init__(self, target_path: list[str]):
+        self.target_path = target_path
+        self.target_nodes = []
+        self.current_path = []
+
+    def visit(self, node):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            self.current_path.append(node.name)
+            if self.current_path == self.target_path:
+                self.target_nodes.append(node)
+            try:
+                res = super().visit(node)
             finally:
-                self.depth -= 1
-        elif hasattr(node, "body") or hasattr(node, "orelse"):
-            return self.visit_body(
-                getattr(node, "body", []) + getattr(node, "orelse", [])
-            )
+                self.current_path.pop()
+            return res
         else:
-            return []
+            return super().visit(node)
 
 
-def build_surrogate_source(source_text, module_ast, def_path, free_vars):
+def _build_surrogate_source(source_text, module_ast, def_path, free_vars):
     """Builds a source file containing the definition of def_path at the same
     lineno as in the ast, with the same parent class(es), but with all other
     lines empty.
     """
-    SuperRewriteTransformer().visit(module_ast)
-    trans = SurrogateTransformer(target_path=def_path, free_vars=free_vars)
-    new_ast = ast.fix_missing_locations(trans.flatten_module(module_ast))
-    source = ast.unparse(new_ast)
-    target_nodes = trans.target_nodes
+    _SuperRewriteTransformer().visit(module_ast)
+    trans = _SurrogateTransformer(target_path=def_path, free_vars=free_vars)
+
+    new_ast = trans.visit(module_ast)
+    new_ast = ast.fix_missing_locations(new_ast)
+    transformed_source = ast.unparse(new_ast)
+    # Re-parse to get updated lineno
+    # TODO: Find a way to do this without reparsing
+    node_finder = FindTargetNode(def_path)
+    node_finder.visit(ast.parse(transformed_source))
+    target_nodes = node_finder.target_nodes
+
     def_path_str = ".".join(def_path)
     if len(target_nodes) == 0:
+        msg = f"Could not find {def_path_str} in new source"
+        _LOGGER.error(msg)
         _LOGGER.error("=== BEGIN SOURCE TEXT ===")
         _LOGGER.error(source_text)
         _LOGGER.error("=== END SOURCE TEXT ===")
         _LOGGER.error(ast.dump(new_ast, indent=2))
-        raise ReloadException(f"Could not find {def_path_str} in new source")
+        raise ReloadException(msg)
     if len(target_nodes) > 1:
         _LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
     target_node = target_nodes[0]
-    missing_lines = trans.original_lineno - target_node.lineno
-    surrogate_src = "\n" * missing_lines + source
-    return surrogate_src
+    merged_source = _merge_sources(
+        original_source=source_text,
+        surrogate_source=transformed_source,
+        original_start_lineno=trans.original_lineno,
+        original_end_lineno=trans.original_end_lineno,
+        surrogate_start_lineno=target_node.lineno,
+        surrogate_end_lineno=target_node.end_lineno,
+    )
+    return merged_source
 
 
 @functools.cache
-def parse_src(source: str) -> ast.AST:
+def _parse_src(source: str) -> ast.AST:
     return ast.parse(source)
 
 
-def get_def_path(func) -> Optional[list[str]]:
+def _get_def_path(func) -> Optional[list[str]]:
     unwrapped_func = inspect.unwrap(func)
     if unwrapped_func is not func:
         _LOGGER.debug("Finding def path of wrapped function.")
@@ -379,10 +462,10 @@ def get_def_path(func) -> Optional[list[str]]:
         raise ReloadException(f"{func!r} was generated and has no source")
     with open(source_filename, "r") as f:
         source_content = f.read()
-    module_ast = parse_src(source_content)
+    module_ast = _parse_src(source_content)
     func_name = unwrapped_func.__name__
     func_lineno = unwrapped_func.__code__.co_firstlineno
-    visitor = FindDefPath(target_name=func_name, target_lineno=func_lineno)
+    visitor = _FindDefPath(target_name=func_name, target_lineno=func_lineno)
     visitor.visit(module_ast)
     if len(visitor.found_def_paths) == 0:
         _LOGGER.error(f"Could not find definition of {unwrapped_func!r}")
@@ -390,9 +473,10 @@ def get_def_path(func) -> Optional[list[str]]:
         return None
     def_path = visitor.found_def_paths[0]
     # Check that we can build a surrogate source for this func
-    build_surrogate_source(
-        source_content, module_ast, def_path, unwrapped_func.__code__.co_freevars
-    )
+    if CHECK_FOR_SOURCE_ON_LOAD:
+        _build_surrogate_source(
+            source_content, module_ast, def_path, unwrapped_func.__code__.co_freevars
+        )
     return visitor.found_def_paths[0]
 
 
@@ -430,7 +514,7 @@ def reload_function(def_path: list[str], func):
         _LOGGER.error(f"Could not reload {func!r}: No known source file")
         return None
     try:
-        surrogate_src = build_surrogate_source(
+        surrogate_src = _build_surrogate_source(
             all_source, src_ast, def_path, unwrapped_func.__code__.co_freevars
         )
     except ReloadException:
@@ -546,7 +630,7 @@ def wrap(
     _LOGGER.debug(f"Wrapping {func!r}")
 
     try:
-        _def_path = get_def_path(func)
+        _def_path = _get_def_path(func)
     except ReloadException as e:
         _LOGGER.error(f"Could not wrap {func!r}: {e}")
         return func
@@ -643,6 +727,9 @@ def _create_undead_traceback(exc_tb, current_frame, wrapper_function):
     prev_tb = exc_tb
     while frame:
         if frame.f_code != wrapper_function.__code__:
+            # Skip live wrapper frames to make the backtrace cleaner
+            # Those calls are presumably not responsible for the crash, so
+            # hiding them is fine.
             prev_tb = types.TracebackType(
                 tb_next=prev_tb,
                 tb_frame=frame,
@@ -678,7 +765,7 @@ def _start_pudb_post_mortem(def_path_str, excinfo):
 def _start_pydevd_post_mortem(def_path_str, excinfo):
     print(f"hot-restart: Continue to revive {def_path_str}", file=sys.stderr)
     print(
-        f"hot-restart: call hot_restart.reraise() and continue to continue raising exception",
+        "hot-restart: call hot_restart.reraise() and continue to continue raising exception",
         file=sys.stderr,
     )
     try:
