@@ -21,6 +21,8 @@ import ast
 from typing import Any, Optional
 import types
 
+import pexpect
+
 
 old_except_hook = None
 
@@ -60,6 +62,8 @@ else:
 # Magic attribute names added by decorators
 HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"
 HOT_RESTART_NO_WRAP = "_hot_restart_no_wrap"
+
+CHECK_FOR_SOURCE_ON_LOAD = False
 
 # Thread locals used during reload
 HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
@@ -125,7 +129,7 @@ class ReloadException(ValueError):
     pass
 
 
-class FindDefPath(ast.NodeVisitor):
+class _FindDefPath(ast.NodeVisitor):
     """Given a target name and line number of a definition, find a definition path.
 
     This gives a more durable identity to a function than its original line number.
@@ -163,7 +167,7 @@ class FindDefPath(ast.NodeVisitor):
             return super().generic_visit(node)
 
 
-class SuperRewriteTransformer(ast.NodeTransformer):
+class _SuperRewriteTransformer(ast.NodeTransformer):
     """
     Rewrite super() -> super(<classname>, <first argument>)
     This ensures that adding a super() call does not result in a new closure,
@@ -211,7 +215,7 @@ class SuperRewriteTransformer(ast.NodeTransformer):
         return node
 
 
-class SurrogateTransformer:
+class _SurrogateTransformer:
     """Transforms module source ast into a module only containing a target
     function and any surrounding scopes necessary for the compile to build the
     right closure for that target.
@@ -227,6 +231,7 @@ class SurrogateTransformer:
         self.depth = 0
         self.target_nodes = []
         self.original_lineno = 0
+        self.original_end_lineno = 0
         self.free_vars = free_vars
 
     def flatten_module(self, node: ast.Module) -> ast.Module:
@@ -264,6 +269,7 @@ class SurrogateTransformer:
                 self.depth += 1
                 if self.depth == len(self.target_path):
                     self.original_lineno = node.lineno
+                    self.original_end_lineno = node.end_lineno
                     # Found the function def
                     self.target_nodes.append(
                         ast.FunctionDef(
@@ -329,15 +335,103 @@ class SurrogateTransformer:
             return []
 
 
-def build_surrogate_source(source_text, module_ast, def_path, free_vars):
+def _merge_sources(
+    original_source: str,
+    surrogate_source: str,
+    original_start_lineno: int,
+    original_end_lineno: int,
+    surrogate_start_lineno: int,
+    surrogate_end_lineno: int,
+):
+    """Combine whitespace from original source with other text from non-surrogate source.
+    This is the light-weight alternative to using a concrete syntax tree.
+    This function only works because within the rewritten function, the
+    surrogate source only contains additions relative to the original source.
+    """
+    print(
+        f"\n -- original source -- \n\n {original_source} \n\n -- end original source --"
+    )
+    print(
+        f"\n -- surrogate source -- \n\n {surrogate_source} \n\n -- end surrogate source --"
+    )
+    original_lines = original_source.splitlines()
+    surrogate_lines = surrogate_source.splitlines()
+    original_chars = "\n".join(
+        original_lines[original_start_lineno : original_end_lineno + 1]
+    )
+    surrogate_chars = "\n".join(
+        surrogate_lines[surrogate_start_lineno : surrogate_end_lineno + 1]
+    )
+
+    print(
+        f"\n -- original chars -- \n\n {original_chars} \n\n -- end original chars --"
+    )
+    print(
+        f"\n -- surrogate chars -- \n\n {surrogate_chars} \n\n -- end surrogate chars --"
+    )
+
+    original_i = 0
+    surrogate_i = 0
+    merged_chars = []
+    while original_i < len(original_chars) and surrogate_i < len(surrogate_chars):
+        print()
+        print("".join(merged_chars))
+        print(f"{original_chars[original_i]!r} vs {surrogate_chars[surrogate_i]!r}")
+        if original_chars[original_i] == "#":
+            print("comment")
+            # Comments only appear in original source
+            # Paste the comment in
+            comment = original_chars[original_i:].split("\n", 1)[0]
+            merged_chars.append(comment)
+            merged_chars.append("\n")
+            original_i += len(comment)
+        elif original_chars[original_i] == surrogate_chars[surrogate_i]:
+            print("matching char")
+            # If we have matching lead characters (could be whitespace), advance both
+            merged_chars.append(original_chars[original_i])
+            original_i += 1
+            surrogate_i += 1
+        elif original_chars[original_i] in " \t\n":
+            print("original whitespace")
+            # If original_chars currently has some whitespace, add it
+            merged_chars.append(original_chars[original_i])
+            original_i += 1
+        elif original_chars[original_i] == ")" and "".join(
+            merged_chars
+        ).strip().endswith("super("):
+            print("non-matching paren")
+            # Non-matching close parens, let surrogate catch up
+            merged_chars.append(surrogate_chars[surrogate_i])
+            surrogate_i += 1
+        else:
+            print("non-matching chars")
+            merged_chars.append(original_chars[original_i])
+            original_i += 1
+            surrogate_i += 1
+        print()
+    merged_chars.append(original_chars[original_i:])
+    missing_line_count = max(0, original_start_lineno - surrogate_start_lineno)
+    merged_text = "\n".join(
+        [
+            "\n" * max(missing_line_count - 1, 0),
+            "\n".join(surrogate_lines[:surrogate_start_lineno]),
+            "".join(merged_chars),
+            "\n".join(surrogate_lines[surrogate_end_lineno + 1 :]),
+        ]
+    )
+    print(f"\n -- merged source -- \n\n {merged_text} \n\n -- end merged source --")
+    return merged_text
+
+
+def _build_surrogate_source(source_text, module_ast, def_path, free_vars):
     """Builds a source file containing the definition of def_path at the same
     lineno as in the ast, with the same parent class(es), but with all other
     lines empty.
     """
-    SuperRewriteTransformer().visit(module_ast)
-    trans = SurrogateTransformer(target_path=def_path, free_vars=free_vars)
+    _SuperRewriteTransformer().visit(module_ast)
+    trans = _SurrogateTransformer(target_path=def_path, free_vars=free_vars)
     new_ast = ast.fix_missing_locations(trans.flatten_module(module_ast))
-    source = ast.unparse(new_ast)
+    transformed_source = ast.unparse(new_ast)
     target_nodes = trans.target_nodes
     def_path_str = ".".join(def_path)
     if len(target_nodes) == 0:
@@ -349,17 +443,25 @@ def build_surrogate_source(source_text, module_ast, def_path, free_vars):
     if len(target_nodes) > 1:
         _LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
     target_node = target_nodes[0]
-    missing_lines = trans.original_lineno - target_node.lineno
-    surrogate_src = "\n" * missing_lines + source
-    return surrogate_src
+    # missing_lines = trans.original_lineno - target_node.lineno
+    # surrogate_src = "\n" * missing_lines + source
+    merged_source = _merge_sources(
+        source_text,
+        transformed_source,
+        trans.original_lineno,
+        trans.original_end_lineno,
+        target_node.lineno,
+        target_node.end_lineno,
+    )
+    return merged_source
 
 
 @functools.cache
-def parse_src(source: str) -> ast.AST:
+def _parse_src(source: str) -> ast.AST:
     return ast.parse(source)
 
 
-def get_def_path(func) -> Optional[list[str]]:
+def _get_def_path(func) -> Optional[list[str]]:
     unwrapped_func = inspect.unwrap(func)
     if unwrapped_func is not func:
         _LOGGER.debug("Finding def path of wrapped function.")
@@ -379,10 +481,10 @@ def get_def_path(func) -> Optional[list[str]]:
         raise ReloadException(f"{func!r} was generated and has no source")
     with open(source_filename, "r") as f:
         source_content = f.read()
-    module_ast = parse_src(source_content)
+    module_ast = _parse_src(source_content)
     func_name = unwrapped_func.__name__
     func_lineno = unwrapped_func.__code__.co_firstlineno
-    visitor = FindDefPath(target_name=func_name, target_lineno=func_lineno)
+    visitor = _FindDefPath(target_name=func_name, target_lineno=func_lineno)
     visitor.visit(module_ast)
     if len(visitor.found_def_paths) == 0:
         _LOGGER.error(f"Could not find definition of {unwrapped_func!r}")
@@ -390,9 +492,10 @@ def get_def_path(func) -> Optional[list[str]]:
         return None
     def_path = visitor.found_def_paths[0]
     # Check that we can build a surrogate source for this func
-    build_surrogate_source(
-        source_content, module_ast, def_path, unwrapped_func.__code__.co_freevars
-    )
+    if CHECK_FOR_SOURCE_ON_LOAD:
+        _build_surrogate_source(
+            source_content, module_ast, def_path, unwrapped_func.__code__.co_freevars
+        )
     return visitor.found_def_paths[0]
 
 
@@ -430,7 +533,7 @@ def reload_function(def_path: list[str], func):
         _LOGGER.error(f"Could not reload {func!r}: No known source file")
         return None
     try:
-        surrogate_src = build_surrogate_source(
+        surrogate_src = _build_surrogate_source(
             all_source, src_ast, def_path, unwrapped_func.__code__.co_freevars
         )
     except ReloadException:
@@ -546,7 +649,7 @@ def wrap(
     _LOGGER.debug(f"Wrapping {func!r}")
 
     try:
-        _def_path = get_def_path(func)
+        _def_path = _get_def_path(func)
     except ReloadException as e:
         _LOGGER.error(f"Could not wrap {func!r}: {e}")
         return func
@@ -643,6 +746,9 @@ def _create_undead_traceback(exc_tb, current_frame, wrapper_function):
     prev_tb = exc_tb
     while frame:
         if frame.f_code != wrapper_function.__code__:
+            # Skip live wrapper frames to make the backtrace cleaner
+            # Those calls are presumably not responsible for the crash, so
+            # hiding them is fine.
             prev_tb = types.TracebackType(
                 tb_next=prev_tb,
                 tb_frame=frame,

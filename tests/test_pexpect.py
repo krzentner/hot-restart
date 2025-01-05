@@ -14,17 +14,25 @@ def copy(test_dir, fname, tmp):
     with open(fname) as f:
         content = f.read()
         print(f"Copying content from {fname} to {tmp.name}")
+        print(f"\n -- contents of {fname} --\n")
         print(content)
+        print(f"\n -- end contents of {fname} --\n")
         tmp.write(content)
         tmp.flush()
-    with open(tmp.name) as f2:
-        print(f"Reading back from {tmp.name}:")
-        print(f2.read())
+    # with open(tmp.name) as f2:
+    #     print(f"Reading back from {tmp.name}:")
+    #     print(f2.read())
 
 
 def exp(child, pattern):
-    child.expect(pattern, timeout=0.5)
-    print(child.before.decode())
+    try:
+        child.expect(pattern, timeout=0.5)
+    except pexpect.exceptions.TIMEOUT:
+        raise AssertionError(f"Timeout with pattern {pattern!r}")
+    finally:
+        print(f"\n -- before {pattern!r} -- \n")
+        print(child.before.decode())
+        print(f"\n -- end before {pattern!r} -- \n")
 
 
 def test_basic():
@@ -36,7 +44,7 @@ def test_basic():
     assert b"13  ->" in child.before
     copy(test_dir, "in_2.py", tmp)
     child.sendline("c")
-    child.expect("in inner: 20", timeout=0.5)
+    exp(child, "in inner: 20")
 
 
 def test_basic_twice():
@@ -54,7 +62,7 @@ def test_basic_twice():
     copy(test_dir, "in_2.py", tmp)
     child.sendline("c")
 
-    child.expect("in inner: 20", timeout=0.5)
+    exp(child, "in inner: 20")
 
 
 def test_basic_reload_module():
@@ -75,7 +83,7 @@ def test_basic_reload_module():
     exp(child, "(Pdb)")
     child.sendline("c")
 
-    child.expect("in inner: 20", timeout=0.5)
+    exp(child, "in inner: 20")
 
 
 def test_child_class():
@@ -87,7 +95,7 @@ def test_child_class():
     assert b"15  ->" in child.before
     copy(test_dir, "in_2.py", tmp)
     child.sendline("c")
-    child.expect("result 49", timeout=0.5)
+    exp(child, "result 49")
 
 
 def test_closure():
@@ -99,7 +107,7 @@ def test_closure():
     assert b"10  ->" in child.before
     copy(test_dir, "in_2.py", tmp)
     child.sendline("c")
-    child.expect("y 2 x 1 test", timeout=0.5)
+    exp(child, "y 2 x 1 test")
 
 def test_nested_functions():
     test_dir = "nested_functions"
@@ -109,17 +117,17 @@ def test_nested_functions():
     exp(child, "(Pdb)")
     assert b"8  ->" in child.before
     # Send ctrl-c
-    child.send('\003')
+    child.sendcontrol('c')
     assert b"8  ->" in child.before
     copy(test_dir, "in_2.py", tmp)
     child.sendline("c")
-    child.expect("hi", timeout=0.5)
+    exp(child, "hi")
 
 
 if __name__ == "__main__":
     test_basic()
-    test_basic_twice()
-    test_basic_reload_module()
-    test_child_class()
-    test_closure()
-    test_nested_functions()
+    # test_basic_twice()
+    # test_basic_reload_module()
+    # test_child_class()
+    # test_closure()
+    # test_nested_functions()
