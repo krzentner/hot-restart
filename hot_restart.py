@@ -21,6 +21,7 @@ import ast
 from typing import Any, Optional
 import types
 import re
+import os
 
 
 old_except_hook = None
@@ -44,29 +45,51 @@ PRINT_HELP_MESSAGE = True
 PROGRAM_SHOULD_EXIT = False
 
 ## Debugger to use
-# Try to import ipdb first
-try:
-    import ipdb
-    DEBUGGER = "ipdb"
+# Check environment variable first
+_ENV_DEBUGGER = os.environ.get("HOT_RESTART_DEBUGGER", "").lower()
+
+if _ENV_DEBUGGER == "pdb":
+    # Force use of pdb
+    DEBUGGER = "pdb"
     DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
-    from IPython.terminal.debugger import TerminalPdb
-    BASE_PDB = TerminalPdb
-except ImportError:
     BASE_PDB = pdb.Pdb
-    # Fall back to other debuggers
-    if "pydevd" in sys.modules:
-        # Handles VSCode, probably others
-        DEBUGGER = "pydevd"
-        # Fake the path of generated sources to match the original source
-        DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
-    elif "pudb" in sys.modules:
-        DEBUGGER = "pudb"
-        DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
-    else:
-        # Default stdlib wrapper
-        DEBUGGER = "pdb"
-        # Show the generated "surrogate" source in the debugger
+elif _ENV_DEBUGGER == "ipdb":
+    # Force use of ipdb
+    try:
+        import ipdb  # noqa: F401
+        from IPython.terminal.debugger import TerminalPdb
+        DEBUGGER = "ipdb"
         DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
+        BASE_PDB = TerminalPdb
+    except ImportError:
+        _LOGGER.warning("ipdb requested but not available, falling back to pdb")
+        DEBUGGER = "pdb"
+        BASE_PDB = pdb.Pdb
+        DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
+else:
+    # Auto-detect: Try to import ipdb first
+    try:
+        import ipdb  # noqa: F401
+        DEBUGGER = "ipdb"
+        DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
+        from IPython.terminal.debugger import TerminalPdb
+        BASE_PDB = TerminalPdb
+    except ImportError:
+        BASE_PDB = pdb.Pdb
+        # Fall back to other debuggers
+        if "pydevd" in sys.modules:
+            # Handles VSCode, probably others
+            DEBUGGER = "pydevd"
+            # Fake the path of generated sources to match the original source
+            DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
+        elif "pudb" in sys.modules:
+            DEBUGGER = "pudb"
+            DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
+        else:
+            # Default stdlib wrapper
+            DEBUGGER = "pdb"
+            # Show the generated "surrogate" source in the debugger
+            DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
 
 # Magic attribute names added by decorators
 HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"

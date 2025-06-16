@@ -35,28 +35,66 @@
 
 ## Development Commands
 
+The project uses [just](https://github.com/casey/just) for common development tasks. Run `just` to see all available commands.
+
 ### Testing
 ```bash
-# Run all tests
-uv run pytest tests/test_pexpect.py
+# Run all tests with default debugger (ipdb if available)
+just test
 
-# Run specific test
-uv run pytest tests/test_pexpect.py::test_basic
+# Run tests with pdb specifically
+just test-pdb
 
-# Run ipdb integration tests
-uv run python tests/test_ipdb_integration.py
+# Run tests with ipdb specifically  
+just test-ipdb
+
+# Run tests with both debuggers
+just test-all
+
+# Run a specific test
+just test-one test_basic
+
+# Run a specific test with pdb
+just test-one-pdb test_basic
 ```
+
+### Debugger Configuration
+hot-restart supports both pdb and ipdb debuggers. Tests can be run with either debugger:
+
+- **Default behavior**: Auto-detects and prefers ipdb if available, falls back to pdb
+- **Force pdb**: Set `HOT_RESTART_DEBUGGER=pdb` environment variable
+- **Force ipdb**: Set `HOT_RESTART_DEBUGGER=ipdb` environment variable
+
+The test suite is designed to work with both debuggers by:
+- Using a regex pattern `(?:\(Pdb\)|ipdb>)` to match both prompts
+- Adapting to different output formats (ANSI codes in ipdb vs plain text in pdb)
+- Using `uv run` to ensure proper environment setup
 
 ### Linting
 ```bash
 # Run ruff linter
-uv run ruff check hot_restart.py
+just lint
+
+# Run linter with auto-fix
+just lint-fix
 ```
 
 ### Building
 ```bash
 # Build package with flit
-uv run flit build
+just build
+```
+
+### Other Commands
+```bash
+# Install development dependencies
+just install-dev
+
+# Run wrap class test
+just test-wrap-class
+
+# Clean up temporary files and caches
+just clean
 ```
 
 ## Project Structure
@@ -115,11 +153,17 @@ hot-restart/
 
 ## Recent Changes
 - **ipdb Integration**: Now attempts to use ipdb by default for better debugging experience with colored output and enhanced features. Falls back to pdb if ipdb is not available.
+- **Debugger Selection**: Added environment variable support (`HOT_RESTART_DEBUGGER`) to force specific debugger selection
+- **Test Suite Updates**: Modified tests to work with both pdb and ipdb debuggers
+- **wrap() Enhancement**: The `wrap()` function now accepts classes in addition to functions, delegating to `wrap_class()` internally
 
 ## Related Files for Reference
-- `hot_restart.py:46-66` - Debugger selection logic (ipdb, pdb, pydevd, pudb)
-- `hot_restart.py:91-121` - HotRestartPdb and HotRestartIpdb class definitions
-- `hot_restart.py:771-816` - Post-mortem debugger integration
-- `hot_restart.py:784-816` - ipdb-specific post-mortem handler
-- `tests/test_ipdb_integration.py` - Tests for ipdb integration
-- `tests/test_pexpect.py:50-100` - Main test infrastructure setup
+- `hot_restart.py:47-92` - Debugger selection logic with environment variable support
+- `hot_restart.py:95-124` - HotRestartPdb class definition
+- `hot_restart.py:619-622` - wrap() function class handling
+- `hot_restart.py:877-883` - wrap_class() function implementation
+- `hot_restart.py:758-801` - Post-mortem debugger integration
+- `tests/test_pexpect.py:8` - DEBUGGER_PROMPT regex pattern for both debuggers
+- `tests/test_pexpect.py:11-23` - check_line_number() helper for debugger output
+- `tests/test_wrap_class.py` - Tests for wrap() with classes
+- `justfile` - Development commands and test configurations
