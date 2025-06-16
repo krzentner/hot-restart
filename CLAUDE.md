@@ -79,6 +79,7 @@ hot-restart/
 - Uses pexpect for interactive debugging session testing
 - Each test has two versions: failing (`in_1.py`) and fixed (`in_2.py`)
 - Tests verify that code reloading works correctly in various scenarios
+- When adding new tests, place them in the `tests/` directory
 
 ## Key Implementation Details
 

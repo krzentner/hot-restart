@@ -617,7 +617,8 @@ def wrap(
     propagate_keyboard_interrupt: bool = True,
 ):
     if inspect.isclass(func):
-        raise ValueError("Use hot_restart.wrap_class to wrap a class")
+        # Handle class wrapping directly
+        return wrap_class(func)
 
     assert isinstance(
         propagated_exceptions, tuple
@@ -878,6 +879,7 @@ def wrap_class(cls):
         if callable(v):
             _LOGGER.info(f"Wrapping {cls!r}.{k}")
             setattr(cls, k, wrap(v))
+    return cls
 
 
 def is_restarting_module():
