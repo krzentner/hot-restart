@@ -969,6 +969,42 @@ def wrap_module(module_or_name=None):
         module_d[k] = v
 
 
+def wrap_modules(pattern):
+    """
+    Wrap multiple modules matching an fnmatch-style pattern.
+    
+    Args:
+        pattern: An fnmatch-style pattern to match module names.
+                Examples: '*' (all modules), 'myapp*' (modules starting with 'myapp'),
+                         '*_utils' (modules ending with '_utils'), 'app.*.*' (nested modules)
+    """
+    import fnmatch
+    
+    _LOGGER.info(f"Wrapping modules matching pattern: {pattern!r}")
+    
+    # Get all currently loaded modules
+    modules_to_wrap = []
+    for module_name, module in list(sys.modules.items()):
+        if module is None:
+            continue
+            
+        # Check if module name matches the pattern
+        if fnmatch.fnmatch(module_name, pattern):
+            # Skip built-in modules and modules without a file
+            if hasattr(module, '__file__') and module.__file__:
+                modules_to_wrap.append((module_name, module))
+    
+    _LOGGER.info(f"Found {len(modules_to_wrap)} modules matching pattern {pattern!r}")
+    
+    # Wrap each matching module
+    for module_name, module in modules_to_wrap:
+        try:
+            _LOGGER.info(f"Wrapping module {module_name!r}")
+            wrap_module(module)
+        except Exception as e:
+            _LOGGER.warning(f"Failed to wrap module {module_name!r}: {e}")
+
+
 def restart_module(module_or_name=None):
     if module_or_name is None:
         # Need to go get module of calling frame
@@ -1018,6 +1054,7 @@ __all__ = [
     "wrap",
     "no_wrap",
     "wrap_module",
+    "wrap_modules",
     "wrap_class",
     "exit",
     "reraise",

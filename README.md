@@ -48,6 +48,22 @@ class MyClass:
         super().forward(x * 2)
 ```
 
+You can also wrap multiple modules at once using `hot_restart.wrap_modules()` with 
+fnmatch-style patterns:
+
+```python
+import hot_restart
+
+# Wrap all imported modules
+hot_restart.wrap_modules('*')
+
+# Wrap all modules starting with 'myapp'
+hot_restart.wrap_modules('myapp*')
+
+# Wrap modules matching a specific pattern
+hot_restart.wrap_modules('myapp.utils.*')
+```
+
 When a wrapped function crashes (by default, throws any exception besides
 `StopIteration`), hot_restart will open a post mortem debugger in the wrapped
 function, with the rest of the stack still live above that function call.
