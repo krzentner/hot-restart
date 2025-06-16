@@ -44,19 +44,29 @@ PRINT_HELP_MESSAGE = True
 PROGRAM_SHOULD_EXIT = False
 
 ## Debugger to use
-if "pydevd" in sys.modules:
-    # Handles VSCode, probably others
-    DEBUGGER = "pydevd"
-    # Fake the path of generated sources to match the original source
-    DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
-elif "pudb" in sys.modules:
-    DEBUGGER = "pudb"
-    DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
-else:
-    # Default stdlib wrapper
-    DEBUGGER = "pdb"
-    # Show the generated "surrogate" source in the debugger
+# Try to import ipdb first
+try:
+    import ipdb
+    DEBUGGER = "ipdb"
     DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
+    from IPython.terminal.debugger import TerminalPdb
+    BASE_PDB = TerminalPdb
+except ImportError:
+    BASE_PDB = pdb.Pdb
+    # Fall back to other debuggers
+    if "pydevd" in sys.modules:
+        # Handles VSCode, probably others
+        DEBUGGER = "pydevd"
+        # Fake the path of generated sources to match the original source
+        DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
+    elif "pudb" in sys.modules:
+        DEBUGGER = "pudb"
+        DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = True
+    else:
+        # Default stdlib wrapper
+        DEBUGGER = "pdb"
+        # Show the generated "surrogate" source in the debugger
+        DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
 
 # Magic attribute names added by decorators
 HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"
@@ -81,16 +91,18 @@ IS_RESTARTING_MODULE.val = False
 EXIT_THIS_FRAME = None
 
 
-class HotRestartPdb(pdb.Pdb):
+class HotRestartPdb(BASE_PDB):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def _cmdloop(self) -> None:
         self.cmdloop()
+        if PROGRAM_SHOULD_EXIT:
+            BASE_PDB.set_quit(self)
 
     def set_quit(self):
-        global PROGRAM_SHOULD_EXIT
-        PROGRAM_SHOULD_EXIT = True
+        reraise()
+        print("Exitting debugging one level. Call hot_restart.exit() to exit the program.")
         super().set_quit()
 
 
@@ -534,8 +546,8 @@ def reload_function(def_path: list[str], func):
 
     surrogate_filename = temp_source.name
     if DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE:
-        _LOGGER.warn(f"Faking path of generated source for {func!r}")
-        _LOGGER.warn(f"Real generated code source is in {temp_source.name}")
+        _LOGGER.warning(f"Faking path of generated source for {func!r}")
+        _LOGGER.warning(f"Real generated code source is in {temp_source.name}")
         surrogate_filename = source_filename
     code = compile(surrogate_src, surrogate_filename, "exec")
     ctxt = dict(vars(module))
@@ -647,11 +659,11 @@ def wrap(
     def_path_str = ".".join([func.__module__] + def_path)
 
     if inspect.unwrap(func) is not func:
-        _LOGGER.warn(
+        _LOGGER.warning(
             f"Wrapping {def_path_str}, but hot_restart.wrap is not innermost decorator."
         )
-        _LOGGER.warn(f"Inner decorator {func!r} will be reloaded with function.")
-        _LOGGER.warn(f"Closure values in {def_path_str} will be lost.")
+        _LOGGER.warning(f"Inner decorator {func!r} will be reloaded with function.")
+        _LOGGER.warning(f"Closure values in {def_path_str} will be lost.")
 
     _LOGGER.debug(f"Adding new base {def_path_str}: {func!r}")
     FUNC_BASE[def_path_str] = func
@@ -689,7 +701,7 @@ def wrap(
                     _start_post_mortem(def_path_str, excinfo, num_dead_frames)
 
                 if PROGRAM_SHOULD_EXIT or EXIT_THIS_FRAME:
-                    _LOGGER.warn(f"Re-raising {e!r}")
+                    _LOGGER.warning(f"Re-raising {e!r}")
                     EXIT_THIS_FRAME = False
                     raise e
                 elif RELOAD_ON_CONTINUE:
@@ -742,7 +754,9 @@ def _create_undead_traceback(exc_tb, current_frame, wrapper_function):
 
 
 def _start_post_mortem(def_path_str, excinfo, num_dead_frames):
-    if DEBUGGER == "pdb":
+    if DEBUGGER == "ipdb":
+        _start_ipdb_post_mortem(def_path_str, excinfo, num_dead_frames)
+    elif DEBUGGER == "pdb":
         _start_pdb_post_mortem(def_path_str, excinfo, num_dead_frames)
     elif DEBUGGER == "pydevd":
         _start_pydevd_post_mortem(def_path_str, excinfo)
@@ -751,6 +765,37 @@ def _start_post_mortem(def_path_str, excinfo, num_dead_frames):
     else:
         _LOGGER.error(f"Unknown debugger {DEBUGGER}, falling back to breakpoint()")
         breakpoint()
+
+
+def _start_ipdb_post_mortem(def_path_str, excinfo, num_dead_frames):
+    global PRINT_HELP_MESSAGE
+    global EXIT_THIS_FRAME
+    _, e, tb = excinfo
+    # Print basic commands
+    print(">")
+    # e_msg = str(e)
+    e_msg = repr(e)
+    if not e_msg:
+        e_msg = repr(e)
+    print(f"> {def_path_str}: {e_msg}")
+    if PRINT_HELP_MESSAGE:
+        print(f"> (c)ontinue to revive {def_path_str}")
+        PRINT_HELP_MESSAGE = False
+    print(">")
+    debugger = HotRestartPdb()
+    debugger.reset()
+
+    debugger.cmdqueue.extend(["u"] * num_dead_frames)
+
+    # Show source around exception
+    debugger.cmdqueue.append("l")
+
+    try:
+        debugger.interaction(None, tb)
+    except KeyboardInterrupt:
+        # If user input KeyboardInterrupt from the debugger,
+        # break up one level.
+        EXIT_THIS_FRAME = True
 
 
 def _start_pudb_post_mortem(def_path_str, excinfo):
@@ -808,10 +853,8 @@ def _start_pdb_post_mortem(def_path_str, excinfo, num_dead_frames):
 
     debugger.cmdqueue.extend(["u"] * num_dead_frames)
 
-    # Show function source
-    # TODO(krzentner): Use original source, instead of
-    # re-fetching from file (which may be out of date)
-    debugger.cmdqueue.append("ll")
+    # Show source around exception
+    debugger.cmdqueue.append("l")
 
     try:
         debugger.interaction(None, tb)

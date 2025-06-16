@@ -21,9 +21,10 @@
    - Rewrites `super()` calls to avoid closure issues
 
 3. **Debugger Integration**
-   - Supports: pdb (default), pydevd (VS Code), pudb
-   - Custom `HotRestartPdb` extends standard pdb
+   - Supports: ipdb (default when available), pdb (fallback), pydevd (VS Code), pudb
+   - Custom `HotRestartPdb` and `HotRestartIpdb` classes extend respective debuggers
    - Post-mortem debugging with preserved stack frames
+   - ipdb provides colored output and enhanced debugging features
 
 ## How It Works
 1. Functions are wrapped with exception handlers
@@ -37,22 +38,25 @@
 ### Testing
 ```bash
 # Run all tests
-pytest tests/test_pexpect.py
+uv run pytest tests/test_pexpect.py
 
 # Run specific test
-pytest tests/test_pexpect.py::test_basic
+uv run pytest tests/test_pexpect.py::test_basic
+
+# Run ipdb integration tests
+uv run python tests/test_ipdb_integration.py
 ```
 
 ### Linting
 ```bash
 # Run ruff linter
-ruff check hot_restart.py
+uv run ruff check hot_restart.py
 ```
 
 ### Building
 ```bash
 # Build package with flit
-flit build
+uv run flit build
 ```
 
 ## Project Structure
@@ -108,8 +112,13 @@ hot-restart/
 - Complex debugging scenarios requiring state preservation
 - Development of algorithms with trial-and-error debugging
 
+## Recent Changes
+- **ipdb Integration**: Now attempts to use ipdb by default for better debugging experience with colored output and enhanced features. Falls back to pdb if ipdb is not available.
+
 ## Related Files for Reference
-- `hot_restart.py:85-120` - Main wrap() function implementation
-- `hot_restart.py:400-500` - AST transformation logic
-- `hot_restart.py:700-800` - Debugger integration
-- `tests/test_pexpect.py:50-100` - Test infrastructure setup
+- `hot_restart.py:46-66` - Debugger selection logic (ipdb, pdb, pydevd, pudb)
+- `hot_restart.py:91-121` - HotRestartPdb and HotRestartIpdb class definitions
+- `hot_restart.py:771-816` - Post-mortem debugger integration
+- `hot_restart.py:784-816` - ipdb-specific post-mortem handler
+- `tests/test_ipdb_integration.py` - Tests for ipdb integration
+- `tests/test_pexpect.py:50-100` - Main test infrastructure setup

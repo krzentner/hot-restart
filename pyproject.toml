@@ -12,3 +12,8 @@ readme = "README.md"
 
 [project.urls]
 Home = "https://github.com/krzentner/hot-restart"
+
+[dependency-groups]
+dev = [
+    "ipdb>=0.13.13",
+]
