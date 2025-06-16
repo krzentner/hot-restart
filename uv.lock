@@ -79,14 +79,14 @@ name = "hot-restart"
 source = { editable = "." }
 
 [package.dev-dependencies]
-dev = [
+recommended = [
     { name = "ipdb" },
 ]
 
 [package.metadata]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ipdb", specifier = ">=0.13.13" }]
+recommended = [{ name = "ipdb", specifier = ">=0.13.13" }]
 
 [[package]]
 name = "ipdb"

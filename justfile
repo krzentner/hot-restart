@@ -46,7 +46,7 @@ build:
 # Install development dependencies
 install-dev:
     uv pip install -r dev-requirements.txt
-    uv pip install --group dev
+    uv pip install --group recommended
 
 # Run ipdb integration tests
 test-ipdb-integration:

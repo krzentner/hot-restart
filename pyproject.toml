@@ -4,8 +4,8 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "hot_restart"
-authors = [{name = "K.R. Zentner", email = "krzentner@gmail.com"}]
-license = {file = "LICENSE"}
+authors = [{ name = "K.R. Zentner", email = "krzentner@gmail.com" }]
+license = { file = "LICENSE" }
 classifiers = ["License :: OSI Approved :: MIT License"]
 dynamic = ["version", "description"]
 readme = "README.md"
@@ -15,6 +15,4 @@ requires-python = ">=3.8"
 Home = "https://github.com/krzentner/hot-restart"
 
 [dependency-groups]
-dev = [
-    "ipdb>=0.13.13",
-]
+recommended = ["ipdb>=0.13.13"]
