@@ -6,30 +6,37 @@ default:
 
 # Run all tests with default debugger (ipdb if available)
 test:
-    uv run pytest tests/test_pexpect.py
+    uv run pytest tests/
 
 # Run all tests with pdb
 test-pdb:
-    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/test_pexpect.py
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/
 
 # Run all tests with ipdb
 test-ipdb:
-    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/test_pexpect.py
+    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/
 
-# Run tests with both debuggers
+# Run pytest tests with both debuggers
+test-both:
+    @echo "Testing with pdb..."
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/
+    @echo "Testing with ipdb..."
+    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/
+
+# Run ALL tests including pytest and standalone scripts
 test-all:
     @echo "Testing with pdb..."
-    @just test-pdb
-    @echo "\nTesting with ipdb..."
-    @just test-ipdb
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/
+    @echo "Testing with ipdb..."
+    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/
 
-# Run a specific test
+# Run a specific test (can specify file::test_name or just test_name)
 test-one TEST:
-    uv run pytest tests/test_pexpect.py::{{TEST}} -v
+    uv run pytest tests/ -k "{{TEST}}" -v
 
 # Run a specific test with pdb
 test-one-pdb TEST:
-    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/test_pexpect.py::{{TEST}} -v
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/ -k "{{TEST}}" -v
 
 # Run linter
 lint:
@@ -52,13 +59,6 @@ install-dev:
 test-ipdb-integration:
     uv run python tests/test_ipdb_integration.py
 
-# Run the wrap class test
-test-wrap-class:
-    uv run python tests/test_wrap_class.py
-
-# Run wrap class test with pdb
-test-wrap-class-pdb:
-    HOT_RESTART_DEBUGGER=pdb uv run python tests/test_wrap_class.py
 
 # Clean up temporary files and caches
 clean:

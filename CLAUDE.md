@@ -87,7 +87,7 @@ just build
 
 ### Other Commands
 ```bash
-# Install development dependencies
+# Install development dependencies (includes recommended ipdb)
 just install-dev
 
 # Run wrap class test

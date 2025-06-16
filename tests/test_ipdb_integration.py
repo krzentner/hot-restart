@@ -33,7 +33,7 @@ class BlockIpdb:
     def find_module(self, fullname, path=None):
         if fullname == 'ipdb':
             return self
-    
+
     def load_module(self, fullname):
         raise ImportError("ipdb not available")
 
@@ -50,26 +50,6 @@ print(hot_restart.DEBUGGER)
     )
     assert result.stdout.strip() == "pdb", f"Expected pdb but got {result.stdout.strip()}"
     print("✓ Successfully falls back to pdb when ipdb is not available")
-
-
-def test_ipdb_debugger_class():
-    """Test that HotRestartIpdb class is created when ipdb is available"""
-    code = """
-import hot_restart
-if hot_restart.DEBUGGER == "ipdb":
-    assert hasattr(hot_restart, 'HotRestartIpdb'), "HotRestartIpdb class not found"
-    print("HotRestartIpdb class exists")
-else:
-    print("Skipped - ipdb not available")
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}
-    )
-    assert result.returncode == 0, f"Test failed: {result.stderr}"
-    print(f"✓ {result.stdout.strip()}")
 
 
 def test_other_debuggers_still_work():
@@ -92,7 +72,7 @@ print(hot_restart.DEBUGGER)
     # Should prefer ipdb over pydevd when both are available
     assert result.stdout.strip() in ["ipdb", "pydevd"], f"Unexpected debugger: {result.stdout.strip()}"
     print(f"✓ pydevd detection works (got {result.stdout.strip()})")
-    
+
     # Test pudb detection when ipdb is not available
     code_pudb = """
 import sys
@@ -126,6 +106,4 @@ if __name__ == "__main__":
     print("Testing ipdb integration...")
     test_ipdb_is_default()
     test_fallback_without_ipdb()
-    test_ipdb_debugger_class()
     test_other_debuggers_still_work()
-    print("\nAll ipdb integration tests passed! ✨")

@@ -24,13 +24,11 @@ import re
 import os
 
 
-old_except_hook = None
-
 _LOGGER = logging.getLogger("hot-restart")
-handler = logging.StreamHandler(sys.stderr)
-formatter = logging.Formatter("%(levelname)s (%(name)s): %(message)s")
-handler.setFormatter(formatter)
-_LOGGER.addHandler(handler)
+_handler = logging.StreamHandler(sys.stderr)
+_formatter = logging.Formatter("%(levelname)s (%(name)s): %(message)s")
+_handler.setFormatter(_formatter)
+_LOGGER.addHandler(_handler)
 _LOGGER.setLevel(logging.WARN)
 
 # Global configuration
@@ -52,7 +50,6 @@ if _ENV_DEBUGGER == "pdb":
     # Force use of pdb
     DEBUGGER = "pdb"
     DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
-    BASE_PDB = pdb.Pdb
 elif _ENV_DEBUGGER == "ipdb":
     # Force use of ipdb
     try:
@@ -60,11 +57,9 @@ elif _ENV_DEBUGGER == "ipdb":
         from IPython.terminal.debugger import TerminalPdb
         DEBUGGER = "ipdb"
         DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
-        BASE_PDB = TerminalPdb
     except ImportError:
         _LOGGER.warning("ipdb requested but not available, falling back to pdb")
         DEBUGGER = "pdb"
-        BASE_PDB = pdb.Pdb
         DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
 else:
     # Auto-detect: Try to import ipdb first
@@ -73,7 +68,21 @@ else:
         DEBUGGER = "ipdb"
         DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = False
         from IPython.terminal.debugger import TerminalPdb
-        BASE_PDB = TerminalPdb
+
+        class _HotRestartIpdb(TerminalPdb):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+
+            def _cmdloop(self) -> None:
+                self.cmdloop()
+                if PROGRAM_SHOULD_EXIT:
+                    TerminalPdb.set_quit(self)
+
+            def set_quit(self):
+                reraise()
+                print("Exitting debugging one level. Call hot_restart.exit() to exit the program.")
+                super().set_quit()
+
     except ImportError:
         BASE_PDB = pdb.Pdb
         # Fall back to other debuggers
@@ -114,14 +123,14 @@ IS_RESTARTING_MODULE.val = False
 EXIT_THIS_FRAME = None
 
 
-class HotRestartPdb(BASE_PDB):
+class _HotRestartPdb(pdb.Pdb):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
     def _cmdloop(self) -> None:
         self.cmdloop()
         if PROGRAM_SHOULD_EXIT:
-            BASE_PDB.set_quit(self)
+            pdb.Pdb.set_quit(self)
 
     def set_quit(self):
         reraise()
@@ -477,7 +486,7 @@ def _parse_src(source: str) -> ast.AST:
     return ast.parse(source)
 
 
-def _get_def_path(func) -> Optional[list[str]]:
+def _get_def_path(func, _recursive=False) -> Optional[list[str]]:
     unwrapped_func = inspect.unwrap(func)
     if unwrapped_func is not func:
         _LOGGER.debug("Finding def path of wrapped function.")
@@ -503,8 +512,9 @@ def _get_def_path(func) -> Optional[list[str]]:
     visitor = _FindDefPath(target_name=func_name, target_lineno=func_lineno)
     visitor.visit(module_ast)
     if len(visitor.found_def_paths) == 0:
-        _LOGGER.error(f"Could not find definition of {unwrapped_func!r}")
-        _LOGGER.debug(ast.dump(module_ast, indent=2))
+        if not _recursive:
+            _LOGGER.error(f"Could not find definition of {unwrapped_func!r}")
+            _LOGGER.debug(ast.dump(module_ast, indent=2))
         return None
     def_path = visitor.found_def_paths[0]
     # Check that we can build a surrogate source for this func
@@ -638,6 +648,7 @@ def wrap(
     *,
     propagated_exceptions: tuple[type[Exception], ...] = (StopIteration,),
     propagate_keyboard_interrupt: bool = True,
+    _recursive: bool = False,
 ):
     if inspect.isclass(func):
         # Handle class wrapping directly
@@ -652,6 +663,7 @@ def wrap(
             wrap,
             propagated_exceptions=propagated_exceptions,
             propagate_keyboard_interrupt=propagate_keyboard_interrupt,
+            _recursive=_recursive,
         )
 
     if HOT_RESTART_IN_SURROGATE_CONTEXT.val:
@@ -666,16 +678,19 @@ def wrap(
     _LOGGER.debug(f"Wrapping {func!r}")
 
     try:
-        _def_path = _get_def_path(func)
+        _def_path = _get_def_path(func, _recursive=_recursive)
     except ReloadException as e:
-        _LOGGER.error(f"Could not wrap {func!r}: {e}")
+        if not _recursive:
+            _LOGGER.error(f"Could not wrap {func!r}: {e}")
         return func
     except (FileNotFoundError, OSError) as e:
-        _LOGGER.error(f"Could not wrap {func!r}: could not get source: {e}")
+        if not _recursive:
+            _LOGGER.error(f"Could not wrap {func!r}: could not get source: {e}")
         return func
 
     if _def_path is None:
-        _LOGGER.error(f"Could not get definition path for {func!r}")
+        if not _recursive:
+            _LOGGER.error(f"Could not get definition path for {func!r}")
         # Assume it's the trivial path
         def_path = [func.__name__]
     else:
@@ -806,7 +821,7 @@ def _start_ipdb_post_mortem(def_path_str, excinfo, num_dead_frames):
         print(f"> (c)ontinue to revive {def_path_str}")
         PRINT_HELP_MESSAGE = False
     print(">")
-    debugger = HotRestartPdb()
+    debugger = _HotRestartIpdb()
     debugger.reset()
 
     debugger.cmdqueue.extend(["u"] * num_dead_frames)
@@ -872,7 +887,7 @@ def _start_pdb_post_mortem(def_path_str, excinfo, num_dead_frames):
         print("> (q)uit to exit program")
         PRINT_HELP_MESSAGE = False
     print(">")
-    debugger = HotRestartPdb()
+    debugger = _HotRestartPdb()
     debugger.reset()
 
     debugger.cmdqueue.extend(["u"] * num_dead_frames)
@@ -899,9 +914,9 @@ ignore = no_wrap
 def wrap_class(cls):
     _LOGGER.info(f"Wrapping class: {cls!r}")
     for k, v in list(vars(cls).items()):
-        if callable(v):
+        if callable(v) and not isinstance(v, type(len)):  # Skip built-in functions
             _LOGGER.info(f"Wrapping {cls!r}.{k}")
-            setattr(cls, k, wrap(v))
+            setattr(cls, k, wrap(v, _recursive=True))
     return cls
 
 
@@ -938,11 +953,11 @@ def wrap_module(module_or_name=None):
                 _LOGGER.info(
                     f"Not wrapping in-scope class {v!r} since it originates from {v_module} != {module_name}"
                 )
-        elif callable(v):
+        elif callable(v) and not isinstance(v, type(len)):  # Skip built-in functions
             v_module = inspect.getmodule(v)
             if v_module and v_module.__name__ == module_name:
                 _LOGGER.info(f"Wrapping callable {v!r}")
-                out_d[k] = wrap(v)
+                out_d[k] = wrap(v, _recursive=True)
             else:
                 _LOGGER.info(
                     f"Not wrapping in-scope callable {v!r} since it originates from {v_module} != {module_name}"
