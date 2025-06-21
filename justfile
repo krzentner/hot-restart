@@ -4,59 +4,69 @@
 default:
     @just --list
 
+# Setup development environment
+setup:
+    uv sync --group dev --group recommended
+
 # Run all tests with default debugger (ipdb if available)
-test:
-    uv run pytest tests/
+test: setup
+    uv run pytest tests/ --isolate
 
 # Run all tests with pdb
-test-pdb:
-    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/
+test-pdb: setup
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/ --isolate
 
 # Run all tests with ipdb
-test-ipdb:
-    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/
+test-ipdb: setup
+    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/ --isolate
 
 # Run pytest tests with both debuggers
-test-both:
+test-both: setup
     @echo "Testing with pdb..."
-    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/ --isolate
     @echo "Testing with ipdb..."
-    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/
+    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/ --isolate
 
 # Run ALL tests including pytest and standalone scripts
-test-all:
+test-all: setup
     @echo "Testing with pdb..."
-    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/ --isolate
     @echo "Testing with ipdb..."
-    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/
+    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/ --isolate
 
 # Run a specific test (can specify file::test_name or just test_name)
-test-one TEST:
-    uv run pytest tests/ -k "{{TEST}}" -v
+test-one TEST: setup
+    uv run pytest tests/ -k "{{TEST}}" -v --isolate
 
 # Run a specific test with pdb
-test-one-pdb TEST:
-    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/ -k "{{TEST}}" -v
+test-one-pdb TEST: setup
+    HOT_RESTART_DEBUGGER=pdb uv run pytest tests/ -k "{{TEST}}" -v --isolate
+
+# Run tests without isolation (for AST tests or debugging)
+test-no-isolate: setup
+    uv run pytest tests/ --no-isolate
+
+# Run a specific test without isolation
+test-one-no-isolate TEST: setup
+    uv run pytest tests/ -k "{{TEST}}" -v --no-isolate
 
 # Run linter
-lint:
+lint: setup
     uv run ruff check hot_restart.py
 
 # Run linter with auto-fix
-lint-fix:
+lint-fix: setup
     uv run ruff check hot_restart.py --fix
 
 # Build package
-build:
+build: setup
     uv run flit build
 
-# Install development dependencies
-install-dev:
-    uv pip install -r dev-requirements.txt
-    uv pip install --group recommended
+# Install development dependencies (alias for setup)
+install-dev: setup
 
 # Run ipdb integration tests
-test-ipdb-integration:
+test-ipdb-integration: setup
     uv run python tests/test_ipdb_integration.py
 
 

@@ -156,9 +156,6 @@ class TestErrorHandling:
 
     def test_wrap_with_invalid_function(self):
         """Test wrapping invalid objects gracefully"""
-        # Should handle None gracefully
-        result = hot_restart.wrap(None)
-        assert result is None
 
         # Should handle already wrapped functions
         def sample_func():

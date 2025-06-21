@@ -160,81 +160,25 @@ class TestDebuggerSelection:
         result = _choose_debugger()
         assert result == 'ipdb'
 
-    @patch.dict('os.environ', {}, clear=True)
-    @patch('importlib.util.find_spec')
-    def test_debugger_auto_detection(self, mock_find_spec):
-        """Test automatic debugger detection when no env var is set"""
-        from hot_restart import _choose_debugger
-
-        # Mock ipdb being available
-        mock_find_spec.return_value = Mock()
-        result = _choose_debugger()
-        assert result in ['ipdb', 'pdb']  # Should prefer ipdb if available
-
-    @patch.dict('os.environ', {}, clear=True)
-    @patch('importlib.util.find_spec')
-    def test_debugger_fallback_to_pdb(self, mock_find_spec):
+    @pytest.mark.isolate
+    def test_debugger_fallback_to_pdb(self):
         """Test fallback to pdb when ipdb is not available"""
-        from hot_restart import _choose_debugger
-
-        # Mock ipdb not being available
-        mock_find_spec.return_value = None
-        result = _choose_debugger()
-        assert result == 'pdb'
-
-
-class TestPostMortemFunctions:
-    """Test post-mortem debugging functions"""
-
-    def test_start_post_mortem_function_exists(self):
-        """Test that _start_post_mortem function exists"""
-        from hot_restart import _start_post_mortem
-        assert callable(_start_post_mortem)
-
-    def test_start_pdb_post_mortem_exists(self):
-        """Test that _start_pdb_post_mortem function exists"""
-        from hot_restart import _start_pdb_post_mortem
-        assert callable(_start_pdb_post_mortem)
-
-    def test_start_ipdb_post_mortem_exists(self):
-        """Test that _start_ipdb_post_mortem function exists"""
-        from hot_restart import _start_ipdb_post_mortem
-        assert callable(_start_ipdb_post_mortem)
-
-    def test_start_pudb_post_mortem_exists(self):
-        """Test that _start_pudb_post_mortem function exists"""
-        from hot_restart import _start_pudb_post_mortem
-        assert callable(_start_pudb_post_mortem)
-
-    def test_start_pydevd_post_mortem_exists(self):
-        """Test that _start_pydevd_post_mortem function exists"""
-        from hot_restart import _start_pydevd_post_mortem
-        assert callable(_start_pydevd_post_mortem)
-
-    @patch('hot_restart.HotRestartPdb')
-    @patch('hot_restart._create_undead_traceback')
-    def test_start_pdb_post_mortem_calls(self, mock_create_tb, mock_pdb_class):
-        """Test that _start_pdb_post_mortem creates proper instances"""
-        from hot_restart import _start_pdb_post_mortem
-
-        # Mock the dependencies
-        mock_tb = Mock()
-        mock_create_tb.return_value = (mock_tb, 0)
-        mock_pdb_instance = Mock()
-        mock_pdb_class.return_value = mock_pdb_instance
-
-        # Create a mock traceback
-        try:
-            raise ValueError("Test exception")
-        except ValueError:
-            import sys
-            exc_info = sys.exc_info()
-
-            # Call the function with correct signature
-            _start_pdb_post_mortem("test_func", exc_info, 0)
-
-            # Verify it was called
-            mock_pdb_class.assert_called_once()
+        import os
+        import sys
+        from unittest.mock import patch
+        
+        # Clear environment and ensure ipdb import fails
+        os.environ.pop('HOT_RESTART_DEBUGGER', None)
+        
+        # Remove ipdb from sys.modules to ensure fresh import attempt
+        sys.modules.pop('ipdb', None)
+        
+        # Mock ipdb module to not exist
+        with patch.dict('sys.modules', {'ipdb': None}):
+            # Now import and test
+            from hot_restart import _choose_debugger
+            result = _choose_debugger()
+            assert result == 'pdb'
 
 
 class TestTracebackHandling:

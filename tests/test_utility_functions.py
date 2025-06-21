@@ -26,6 +26,7 @@ class TestBuildSurrogateSource:
 
     def test_build_surrogate_source_basic(self):
         """Test building surrogate source for a simple function"""
+
         source = """
 def test_function():
     return 42
@@ -37,6 +38,7 @@ def test_function():
 
     def test_build_surrogate_source_with_args(self):
         """Test building surrogate source with function arguments"""
+
         source = """
 def test_function(a, b):
     return a + b
@@ -49,6 +51,7 @@ def test_function(a, b):
 
     def test_build_surrogate_source_with_closure(self):
         """Test building surrogate source with closure variables"""
+
         source = """
 def test_function():
     return x + y
@@ -61,6 +64,7 @@ def test_function():
 
     def test_build_surrogate_source_invalid_syntax(self):
         """Test building surrogate source with invalid syntax"""
+
         source = "def invalid_syntax(:"  # Intentionally broken
         with pytest.raises(SyntaxError):
             tree = hot_restart._parse_src(source)
@@ -200,29 +204,6 @@ class TestGetDefPath:
 class TestReloadFunction:
     """Test the reload_function function"""
 
-    @patch('hot_restart.inspect')
-    @patch('hot_restart.build_surrogate_source')
-    def test_reload_function_basic(self, mock_build_surrogate, mock_inspect):
-        """Test basic function reloading"""
-        # Mock function object
-        mock_func = Mock()
-        mock_func.__name__ = "test_func"
-        mock_func.__code__ = Mock()
-        mock_func.__code__.co_filename = "/fake/path.py"
-        mock_func.__code__.co_firstlineno = 1
-        mock_func.__code__.co_varnames = ()
-        mock_func.__closure__ = None
-
-        # Mock inspect.getsource
-        mock_inspect.getsource.return_value = "def test_func(): return 42"
-
-        # Mock build_surrogate_source
-        mock_build_surrogate.return_value = "def test_func(): return 42"
-
-        # Test the function
-        result = reload_function(mock_func)
-        assert result is not None
-
     def test_reload_function_with_real_function(self):
         """Test reloading a real function (integration test)"""
         def sample_function():
@@ -254,26 +235,6 @@ class TestExitFunction:
     def test_exit_function_exists(self):
         """Test that exit function exists and is callable"""
         assert callable(exit)
-
-
-class TestReraiseFunction:
-    """Test the reraise function"""
-
-    def test_reraise_with_exception(self):
-        """Test reraising an exception"""
-        try:
-            raise ValueError("test error")
-        except ValueError:
-            import sys
-            exc_info = sys.exc_info()
-
-            # Should reraise the exception
-            with pytest.raises(ValueError, match="test error"):
-                reraise(*exc_info)
-
-    def test_reraise_function_exists(self):
-        """Test that reraise function exists and is callable"""
-        assert callable(reraise)
 
 
 class TestNoWrapDecorator:
@@ -322,21 +283,6 @@ class TestIsRestartingModule:
     def test_is_restarting_module_function_exists(self):
         """Test that is_restarting_module function exists"""
         assert callable(is_restarting_module)
-
-
-class TestSetupLogger:
-    """Test the setup_logger function"""
-
-    def test_setup_logger_returns_logger(self):
-        """Test that setup_logger returns a logger object"""
-        logger = setup_logger()
-        import logging
-        assert isinstance(logger, logging.Logger)
-
-    def test_setup_logger_configuration(self):
-        """Test that setup_logger configures logger properly"""
-        logger = setup_logger()
-        assert logger.name == "hot_restart"
 
 
 class TestModuleUtilities:

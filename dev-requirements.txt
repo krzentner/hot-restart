@@ -1,4 +1,0 @@
-flit
-pexpect
-pytest
-ruff

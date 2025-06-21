@@ -16,3 +16,10 @@ Home = "https://github.com/krzentner/hot-restart"
 
 [dependency-groups]
 recommended = ["ipdb>=0.13.13"]
+dev = [
+    "flit",
+    "pexpect",
+    "pytest",
+    "pytest-isolate",
+    "ruff",
+]
