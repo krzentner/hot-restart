@@ -33,12 +33,12 @@ def setup_logger():
     logger.setLevel(logging.WARN)
     return logger
 
-LOGGER = setup_logger()
+_LOGGER = setup_logger()
 
 # Global configuration
 
 ## Automatically reload code on continue.
-RELOAD_ON_CONTINUE = True
+_RELOAD_ON_CONTINUE = True
 
 ## Print the help message when first opening pdb
 PRINT_HELP_MESSAGE = True
@@ -76,30 +76,30 @@ def _choose_debugger():
 
 ## Debugger to use
 DEBUGGER = _choose_debugger()
-DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = DEBUGGER not in ("pdb", "ipdb")
+_DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE = DEBUGGER not in ("pdb", "ipdb")
 
 
 # Magic attribute names added by decorators
-HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"
-HOT_RESTART_NO_WRAP = "_hot_restart_no_wrap"
+_HOT_RESTART_ALREADY_WRAPPED = "_hot_restart_already_wrapped"
+_HOT_RESTART_NO_WRAP = "_hot_restart_no_wrap"
 
-CHECK_FOR_SOURCE_ON_LOAD = False
+_CHECK_FOR_SOURCE_ON_LOAD = False
 
 # Thread locals used during reload
-HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
-HOT_RESTART_MODULE_RELOAD_CONTEXT.val = {}
+_HOT_RESTART_MODULE_RELOAD_CONTEXT = threading.local()
+_HOT_RESTART_MODULE_RELOAD_CONTEXT.val = {}
 
-HOT_RESTART_SURROGATE_RESULT = "HOT_RESTART_SURROGATE_RESULT"
+_HOT_RESTART_SURROGATE_RESULT = "HOT_RESTART_SURROGATE_RESULT"
 
-HOT_RESTART_IN_SURROGATE_CONTEXT = threading.local()
-HOT_RESTART_IN_SURROGATE_CONTEXT.val = None
+_HOT_RESTART_IN_SURROGATE_CONTEXT = threading.local()
+_HOT_RESTART_IN_SURROGATE_CONTEXT.val = None
 
-IS_RESTARTING_MODULE = threading.local()
-IS_RESTARTING_MODULE.val = False
+_IS_RESTARTING_MODULE = threading.local()
+_IS_RESTARTING_MODULE.val = False
 
 # This needs to be settable from the debugger UI
 # Unfortunately we have no idea what thread the debugger will set this from
-EXIT_THIS_FRAME = None
+_EXIT_THIS_FRAME = None
 
 
 class HotRestartPdb(pdb.Pdb):
@@ -129,20 +129,20 @@ def exit():
 def reraise():
     """Calling the function will cause the current exception to be
     re-raised in the current thread when the debuger exits."""
-    global EXIT_THIS_FRAME
-    EXIT_THIS_FRAME = True
+    global _EXIT_THIS_FRAME
+    _EXIT_THIS_FRAME = True
 
 
 # Mapping from definition paths to temp files of reloaded code.
 # Temp files are allocated to hold surrogate source so that the debugger can
 # still show correct code listings even after the files are updated.
 # One source file is allocated per function.
-TMP_SOURCE_FILES = {}
+_TMP_SOURCE_FILES = {}
 
 # Mapping from surrogate source filenames to original filenames
 # Used to find the original source in cases of reloading an nested inner
 # function after the outer function has been reloaded
-TMP_SOURCE_ORIGINAL_MAP = {}
+_TMP_SOURCE_ORIGINAL_MAP = {}
 
 
 class ReloadException(ValueError):
@@ -178,10 +178,10 @@ class FindDefPath(ast.NodeVisitor):
                 ):
                     self.found_def_paths.append([node.name for node in self.path_now])
                 else:
-                    LOGGER.debug("Found matching name to def at wrong lineno:")
-                    LOGGER.debug(f"    target_lineno = {self.target_lineno}")
-                    LOGGER.debug(f"    start_lineno = {start_lineno}")
-                    LOGGER.debug(f"    end_lineno = {end_lineno}")
+                    _LOGGER.debug("Found matching name to def at wrong lineno:")
+                    _LOGGER.debug(f"    target_lineno = {self.target_lineno}")
+                    _LOGGER.debug(f"    start_lineno = {start_lineno}")
+                    _LOGGER.debug(f"    end_lineno = {end_lineno}")
             res = super().generic_visit(node)
             self.path_now.pop()
             return res
@@ -232,7 +232,7 @@ class SuperRewriteTransformer(ast.NodeTransformer):
                     ast.Name(self.first_arg_stack[-1]),
                 ]
             except IndexError:
-                LOGGER.error(f"Could not rewrite super() call at line {node.lineno}")
+                _LOGGER.error(f"Could not rewrite super() call at line {node.lineno}")
         self.generic_visit(node)
         return node
 
@@ -344,8 +344,8 @@ class SurrogateTransformer(ast.NodeTransformer):
         return None
 
 
-SUPER_CALL = re.compile(r"super\(([^)]*)\)")
-EMPTY_SUPER_CALL = re.compile(r"super\(\s*\)")
+_SUPER_CALL = re.compile(r"super\(([^)]*)\)")
+_EMPTY_SUPER_CALL = re.compile(r"super\(\s*\)")
 
 
 def _merge_sources(
@@ -371,12 +371,12 @@ def _merge_sources(
         surrogate_lines[surrogate_start_lineno:surrogate_end_lineno]
     )
 
-    super_args = SUPER_CALL.search(surrogate_chars)
+    super_args = _SUPER_CALL.search(surrogate_chars)
     if super_args is not None:
         args = super_args.groups(1)[0]
         replacement = f"super({args})"
         # Replace every empty super() call with the replacement
-        merged_chars = EMPTY_SUPER_CALL.sub(replacement, original_chars)
+        merged_chars = _EMPTY_SUPER_CALL.sub(replacement, original_chars)
     else:
         merged_chars = original_chars
     missing_line_count = max(0, original_start_lineno - surrogate_start_lineno)
@@ -440,14 +440,14 @@ def build_surrogate_source(source_text, module_ast, def_path, free_vars):
     def_path_str = ".".join(def_path)
     if len(target_nodes) == 0:
         msg = f"Could not find {def_path_str} in new source"
-        LOGGER.error(msg)
-        LOGGER.error("=== BEGIN SOURCE TEXT ===")
-        LOGGER.error(source_text)
-        LOGGER.error("=== END SOURCE TEXT ===")
-        LOGGER.error(ast.dump(new_ast, indent=2))
+        _LOGGER.error(msg)
+        _LOGGER.error("=== BEGIN SOURCE TEXT ===")
+        _LOGGER.error(source_text)
+        _LOGGER.error("=== END SOURCE TEXT ===")
+        _LOGGER.error(ast.dump(new_ast, indent=2))
         raise ReloadException(msg)
     if len(target_nodes) > 1:
-        LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
+        _LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
     target_node = target_nodes[0]
     merged_source = _merge_sources(
         original_source=source_text,
@@ -468,15 +468,15 @@ def _parse_src(source: str) -> ast.AST:
 def _get_def_path(func, _recursive=False) -> Optional[list[str]]:
     unwrapped_func = inspect.unwrap(func)
     if unwrapped_func is not func:
-        LOGGER.debug("Finding def path of wrapped function.")
+        _LOGGER.debug("Finding def path of wrapped function.")
         try:
-            LOGGER.debug(
+            _LOGGER.debug(
                 f"function {func!r} has source file {inspect.getsourcefile(func)}"
             )
         except TypeError:
-            LOGGER.debug(f"function {func!r} has no source file")
+            _LOGGER.debug(f"function {func!r} has no source file")
 
-        LOGGER.debug(
+        _LOGGER.debug(
             f"unwrapped function {unwrapped_func!r} has source file {inspect.getsourcefile(unwrapped_func)}"
         )
 
@@ -492,12 +492,12 @@ def _get_def_path(func, _recursive=False) -> Optional[list[str]]:
     visitor.visit(module_ast)
     if len(visitor.found_def_paths) == 0:
         if not _recursive:
-            LOGGER.error(f"Could not find definition of {unwrapped_func!r}")
-            LOGGER.debug(ast.dump(module_ast, indent=2))
+            _LOGGER.error(f"Could not find definition of {unwrapped_func!r}")
+            _LOGGER.debug(ast.dump(module_ast, indent=2))
         return None
     def_path = visitor.found_def_paths[0]
     # Check that we can build a surrogate source for this func
-    if CHECK_FOR_SOURCE_ON_LOAD:
+    if _CHECK_FOR_SOURCE_ON_LOAD:
         build_surrogate_source(
             source_content, module_ast, def_path, unwrapped_func.__code__.co_freevars
         )
@@ -515,27 +515,27 @@ def reload_function(def_path: list[str], func):
     def_str = ".".join(def_path)
     unwrapped_func = inspect.unwrap(func)
     source_filename = inspect.getsourcefile(unwrapped_func)
-    source_filename = TMP_SOURCE_ORIGINAL_MAP.get(source_filename, source_filename)
-    LOGGER.debug(f"Reloading {def_str} from {source_filename}")
+    source_filename = _TMP_SOURCE_ORIGINAL_MAP.get(source_filename, source_filename)
+    _LOGGER.debug(f"Reloading {def_str} from {source_filename}")
     try:
         with open(source_filename, "r") as f:
             all_source = f.read()
     except (OSError, FileNotFoundError, tokenize.TokenError) as e:
-        LOGGER.error(
+        _LOGGER.error(
             f"Could not read source for {func!r} from {source_filename}: {e!r}"
         )
         return None
     try:
         src_ast = ast.parse(all_source, filename=source_filename)
     except SyntaxError as e:
-        LOGGER.error(f"Could not parse source for {func!r}: {e!r}")
+        _LOGGER.error(f"Could not parse source for {func!r}: {e!r}")
         return None
 
     module = inspect.getmodule(func)
     if source_filename is None:
         # Probably used in an interactive session or something, which
         # we don't know how to get source code from.
-        LOGGER.error(f"Could not reload {func!r}: No known source file")
+        _LOGGER.error(f"Could not reload {func!r}: No known source file")
         return None
     try:
         surrogate_src = build_surrogate_source(
@@ -552,30 +552,30 @@ def reload_function(def_path: list[str], func):
     temp_source = tempfile.NamedTemporaryFile(suffix=flat_filename, mode="w")
     temp_source.write(surrogate_src)
     temp_source.flush()
-    LOGGER.debug("=== SURROGATE SOURCE BEGIN ===")
-    LOGGER.debug(surrogate_src)
-    LOGGER.debug("=== SURROGATE SOURCE END ===")
+    _LOGGER.debug("=== SURROGATE SOURCE BEGIN ===")
+    _LOGGER.debug(surrogate_src)
+    _LOGGER.debug("=== SURROGATE SOURCE END ===")
 
     surrogate_filename = temp_source.name
-    if DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE:
-        LOGGER.warning(f"Faking path of generated source for {func!r}")
-        LOGGER.warning(f"Real generated code source is in {temp_source.name}")
+    if _DEBUG_ORIGINAL_PATH_FOR_RELOADED_CODE:
+        _LOGGER.warning(f"Faking path of generated source for {func!r}")
+        _LOGGER.warning(f"Real generated code source is in {temp_source.name}")
         surrogate_filename = source_filename
     code = compile(surrogate_src, surrogate_filename, "exec")
     ctxt = dict(vars(module))
 
-    if HOT_RESTART_SURROGATE_RESULT in ctxt:
-        del ctxt[HOT_RESTART_SURROGATE_RESULT]
-        LOGGER.error("Leftover result from surrogate load")
+    if _HOT_RESTART_SURROGATE_RESULT in ctxt:
+        del ctxt[_HOT_RESTART_SURROGATE_RESULT]
+        _LOGGER.error("Leftover result from surrogate load")
 
     try:
-        HOT_RESTART_IN_SURROGATE_CONTEXT.val = ctxt
+        _HOT_RESTART_IN_SURROGATE_CONTEXT.val = ctxt
         exec(code, ctxt, ctxt)
     finally:
-        HOT_RESTART_IN_SURROGATE_CONTEXT.val = None
-    raw_func = ctxt.get(HOT_RESTART_SURROGATE_RESULT, None)
+        _HOT_RESTART_IN_SURROGATE_CONTEXT.val = None
+    raw_func = ctxt.get(_HOT_RESTART_SURROGATE_RESULT, None)
     if raw_func is None:
-        LOGGER.error(f"Could not reload {func!r}: Could not find {def_str}")
+        _LOGGER.error(f"Could not reload {func!r}: Could not find {def_str}")
         return None
     if raw_func is inspect.unwrap(raw_func):
         # We are wrapping directly, patch up closure.
@@ -584,11 +584,11 @@ def reload_function(def_path: list[str], func):
             closure = ()
         n_freevars = len(raw_func.__code__.co_freevars)
         if not isinstance(closure, tuple) or n_freevars != len(closure):
-            LOGGER.error(
+            _LOGGER.error(
                 f"New {def_str} has closure cells {closure!r}"
                 f" but {n_freevars} cells were expected"
             )
-            LOGGER.error(f"Closures in {def_str} lost")
+            _LOGGER.error(f"Closures in {def_str} lost")
             closure = tuple(
                 [types.CellType("HOT_RESTART_LOST_CLOSURE") for _ in range(n_freevars)]
             )
@@ -604,22 +604,22 @@ def reload_function(def_path: list[str], func):
         )
     else:
         # We already warn about this on wrap, no need to repeat on reload
-        LOGGER.debug(
+        _LOGGER.debug(
             f"wrap was not innermost decorator of {def_str}, closures will not work"
         )
         new_func = raw_func
     # Keep new temp file alive until function is reloaded again
-    TMP_SOURCE_FILES[def_str] = temp_source
-    TMP_SOURCE_ORIGINAL_MAP[temp_source.name] = source_filename
+    _TMP_SOURCE_FILES[def_str] = temp_source
+    _TMP_SOURCE_ORIGINAL_MAP[temp_source.name] = source_filename
     return new_func
 
 
 # Mapping from definition path strings to most up-to-date version of those functions
 # External to wrap() so that it can be updated during full module reload.
-FUNC_NOW = {}
+_FUNC_NOW = {}
 
 # Last version of a function from full module (re)load.
-FUNC_BASE = {}
+_FUNC_BASE = {}
 
 
 def wrap(
@@ -645,31 +645,31 @@ def wrap(
             _recursive=_recursive,
         )
 
-    if HOT_RESTART_IN_SURROGATE_CONTEXT.val:
-        # We're in surrogate source, don't wrap again (or override the FUNC_BASE)
-        HOT_RESTART_IN_SURROGATE_CONTEXT.val[HOT_RESTART_SURROGATE_RESULT] = func
+    if _HOT_RESTART_IN_SURROGATE_CONTEXT.val:
+        # We're in surrogate source, don't wrap again (or override the _FUNC_BASE)
+        _HOT_RESTART_IN_SURROGATE_CONTEXT.val[_HOT_RESTART_SURROGATE_RESULT] = func
         return func
 
-    if getattr(func, HOT_RESTART_ALREADY_WRAPPED, False):
-        LOGGER.debug(f"Already wrapped {func!r}, not wrapping again")
+    if getattr(func, _HOT_RESTART_ALREADY_WRAPPED, False):
+        _LOGGER.debug(f"Already wrapped {func!r}, not wrapping again")
         return func
 
-    LOGGER.debug(f"Wrapping {func!r}")
+    _LOGGER.debug(f"Wrapping {func!r}")
 
     try:
         _def_path = _get_def_path(func, _recursive=_recursive)
     except ReloadException as e:
         if not _recursive:
-            LOGGER.error(f"Could not wrap {func!r}: {e}")
+            _LOGGER.error(f"Could not wrap {func!r}: {e}")
         return func
     except (FileNotFoundError, OSError) as e:
         if not _recursive:
-            LOGGER.error(f"Could not wrap {func!r}: could not get source: {e}")
+            _LOGGER.error(f"Could not wrap {func!r}: could not get source: {e}")
         return func
 
     if _def_path is None:
         if not _recursive:
-            LOGGER.error(f"Could not get definition path for {func!r}")
+            _LOGGER.error(f"Could not get definition path for {func!r}")
         # Assume it's the trivial path
         def_path = [func.__name__]
     else:
@@ -677,27 +677,27 @@ def wrap(
     def_path_str = ".".join([func.__module__] + def_path)
 
     if inspect.unwrap(func) is not func:
-        LOGGER.warning(
+        _LOGGER.warning(
             f"Wrapping {def_path_str}, but hot_restart.wrap is not innermost decorator."
         )
-        LOGGER.warning(f"Inner decorator {func!r} will be reloaded with function.")
-        LOGGER.warning(f"Closure values in {def_path_str} will be lost.")
+        _LOGGER.warning(f"Inner decorator {func!r} will be reloaded with function.")
+        _LOGGER.warning(f"Closure values in {def_path_str} will be lost.")
 
-    LOGGER.debug(f"Adding new base {def_path_str}: {func!r}")
-    FUNC_BASE[def_path_str] = func
-    FUNC_NOW[def_path_str] = func
+    _LOGGER.debug(f"Adding new base {def_path_str}: {func!r}")
+    _FUNC_BASE[def_path_str] = func
+    _FUNC_NOW[def_path_str] = func
 
     @functools.wraps(func)
     def wrapped(*args, **kwargs):
         global PROGRAM_SHOULD_EXIT
-        global EXIT_THIS_FRAME
-        EXIT_THIS_FRAME = False
+        global _EXIT_THIS_FRAME
+        _EXIT_THIS_FRAME = False
         restart_count = 0
-        while not PROGRAM_SHOULD_EXIT and not EXIT_THIS_FRAME:
+        while not PROGRAM_SHOULD_EXIT and not _EXIT_THIS_FRAME:
             if restart_count > 0:
-                LOGGER.info(f"Restarting {FUNC_NOW[def_path_str]!r}")
+                _LOGGER.info(f"Restarting {_FUNC_NOW[def_path_str]!r}")
             try:
-                func_now = FUNC_NOW[def_path_str]
+                func_now = _FUNC_NOW[def_path_str]
                 result = func_now(*args, **kwargs)
                 return result
             except Exception as e:
@@ -708,7 +708,7 @@ def wrap(
                     # The user is probably intentionally exiting
                     PROGRAM_SHOULD_EXIT = True
 
-                if not PROGRAM_SHOULD_EXIT and not EXIT_THIS_FRAME:
+                if not PROGRAM_SHOULD_EXIT and not _EXIT_THIS_FRAME:
                     excinfo = sys.exc_info()
 
                     new_tb, num_dead_frames = _create_undead_traceback(
@@ -718,18 +718,18 @@ def wrap(
 
                     _start_post_mortem(def_path_str, excinfo, num_dead_frames)
 
-                if PROGRAM_SHOULD_EXIT or EXIT_THIS_FRAME:
-                    LOGGER.warning(f"Re-raising {e!r}")
-                    EXIT_THIS_FRAME = False
+                if PROGRAM_SHOULD_EXIT or _EXIT_THIS_FRAME:
+                    _LOGGER.warning(f"Re-raising {e!r}")
+                    _EXIT_THIS_FRAME = False
                     raise e
-                elif RELOAD_ON_CONTINUE:
-                    new_func = reload_function(def_path, FUNC_BASE[def_path_str])
+                elif _RELOAD_ON_CONTINUE:
+                    new_func = reload_function(def_path, _FUNC_BASE[def_path_str])
                     if new_func is not None:
                         print(f"> Reloaded {new_func!r}")
-                        FUNC_NOW[def_path_str] = new_func
+                        _FUNC_NOW[def_path_str] = new_func
             restart_count += 1
 
-    setattr(wrapped, HOT_RESTART_ALREADY_WRAPPED, True)
+    setattr(wrapped, _HOT_RESTART_ALREADY_WRAPPED, True)
 
     return wrapped
 
@@ -749,7 +749,7 @@ def _create_undead_traceback(exc_tb, current_frame, wrapper_function):
     # provide a more useful context
     if dead_tb is not None and dead_tb.tb_frame.f_code == wrapper_function.__code__:
         num_dead_frames += 1
-        LOGGER.warning("Debug frame is offset from restart frame")
+        _LOGGER.warning("Debug frame is offset from restart frame")
 
     frame = current_frame
 
@@ -781,13 +781,13 @@ def _start_post_mortem(def_path_str, excinfo, num_dead_frames):
     elif DEBUGGER == "pudb":
         _start_pudb_post_mortem(def_path_str, excinfo)
     else:
-        LOGGER.error(f"Unknown debugger {DEBUGGER}, falling back to breakpoint()")
+        _LOGGER.error(f"Unknown debugger {DEBUGGER}, falling back to breakpoint()")
         breakpoint()
 
 
 def _start_ipdb_post_mortem(def_path_str, excinfo, num_dead_frames):
     global PRINT_HELP_MESSAGE
-    global EXIT_THIS_FRAME
+    global _EXIT_THIS_FRAME
 
     import ipdb  # noqa: F401
     from IPython.terminal.debugger import TerminalPdb
@@ -831,13 +831,13 @@ def _start_ipdb_post_mortem(def_path_str, excinfo, num_dead_frames):
     except KeyboardInterrupt:
         # If user input KeyboardInterrupt from the debugger,
         # break up one level.
-        EXIT_THIS_FRAME = True
+        _EXIT_THIS_FRAME = True
 
 
 def _start_pudb_post_mortem(def_path_str, excinfo):
     e_type, e, tb = excinfo
 
-    LOGGER.debug(f"Entering pudb debugging of {def_path_str}")
+    _LOGGER.debug(f"Entering pudb debugging of {def_path_str}")
     import pudb
 
     pudb.post_mortem(tb=tb, e_type=e_type, e_value=e)
@@ -869,7 +869,7 @@ def _start_pydevd_post_mortem(def_path_str, excinfo):
 
 def _start_pdb_post_mortem(def_path_str, excinfo, num_dead_frames):
     global PRINT_HELP_MESSAGE
-    global EXIT_THIS_FRAME
+    global _EXIT_THIS_FRAME
     _, e, tb = excinfo
     # Print basic commands
     print(">")
@@ -895,11 +895,11 @@ def _start_pdb_post_mortem(def_path_str, excinfo, num_dead_frames):
     except KeyboardInterrupt:
         # If user input KeyboardInterrupt from the debugger,
         # break up one level.
-        EXIT_THIS_FRAME = True
+        _EXIT_THIS_FRAME = True
 
 
 def no_wrap(func_or_class):
-    setattr(func_or_class, HOT_RESTART_NO_WRAP, True)
+    setattr(func_or_class, _HOT_RESTART_NO_WRAP, True)
     return func_or_class
 
 
@@ -907,16 +907,16 @@ ignore = no_wrap
 
 
 def wrap_class(cls):
-    LOGGER.info(f"Wrapping class: {cls!r}")
+    _LOGGER.info(f"Wrapping class: {cls!r}")
     for k, v in list(vars(cls).items()):
         if callable(v) and not isinstance(v, type(len)):  # Skip built-in functions
-            LOGGER.info(f"Wrapping {cls!r}.{k}")
+            _LOGGER.info(f"Wrapping {cls!r}.{k}")
             setattr(cls, k, wrap(v, _recursive=True))
     return cls
 
 
 def is_restarting_module():
-    return IS_RESTARTING_MODULE.val
+    return _IS_RESTARTING_MODULE.val
 
 
 def wrap_module(module_or_name=None):
@@ -930,35 +930,35 @@ def wrap_module(module_or_name=None):
     else:
         module_name = module_or_name.__name__
         module_d = module_or_name.__dict__
-    module_d = HOT_RESTART_MODULE_RELOAD_CONTEXT.val.get(module_name, module_d)
-    LOGGER.info(f"Wrapping module {module_name!r}")
+    module_d = _HOT_RESTART_MODULE_RELOAD_CONTEXT.val.get(module_name, module_d)
+    _LOGGER.info(f"Wrapping module {module_name!r}")
 
     out_d = {}
     for k, v in list(module_d.items()):
-        if getattr(v, HOT_RESTART_NO_WRAP, False):
-            LOGGER.info(f"Skipping wrapping of no_wrap {v!r}")
-        elif getattr(v, HOT_RESTART_ALREADY_WRAPPED, False):
-            LOGGER.info(f"Skipping already wrapped {v!r}")
+        if getattr(v, _HOT_RESTART_NO_WRAP, False):
+            _LOGGER.info(f"Skipping wrapping of no_wrap {v!r}")
+        elif getattr(v, _HOT_RESTART_ALREADY_WRAPPED, False):
+            _LOGGER.info(f"Skipping already wrapped {v!r}")
         elif inspect.isclass(v):
             v_module = inspect.getmodule(v)
             if v_module and v_module.__name__ == module_name:
-                LOGGER.info(f"Wrapping class {v!r}")
+                _LOGGER.info(f"Wrapping class {v!r}")
                 wrap_class(v)
             else:
-                LOGGER.info(
+                _LOGGER.info(
                     f"Not wrapping in-scope class {v!r} since it originates from {v_module} != {module_name}"
                 )
         elif callable(v) and not isinstance(v, type(len)):  # Skip built-in functions
             v_module = inspect.getmodule(v)
             if v_module and v_module.__name__ == module_name:
-                LOGGER.info(f"Wrapping callable {v!r}")
+                _LOGGER.info(f"Wrapping callable {v!r}")
                 out_d[k] = wrap(v, _recursive=True)
             else:
-                LOGGER.info(
+                _LOGGER.info(
                     f"Not wrapping in-scope callable {v!r} since it originates from {v_module} != {module_name}"
                 )
         else:
-            LOGGER.debug(f"Not wrapping {v!r}")
+            _LOGGER.debug(f"Not wrapping {v!r}")
 
     for k, v in out_d.items():
         module_d[k] = v
@@ -984,22 +984,22 @@ def restart_module(module_or_name=None):
     except (OSError, FileNotFoundError) as e:
         raise ReloadException(f"Could not load {module!r} source: {e!r}")
 
-    LOGGER.info(f"Reloading module {module!r} from source file {source_filename}")
-    LOGGER.debug("=== RELOAD SOURCE BEGIN ===")
-    LOGGER.debug(source)
-    LOGGER.debug("=== RELOAD SOURCE END ===")
+    _LOGGER.info(f"Reloading module {module!r} from source file {source_filename}")
+    _LOGGER.debug("=== RELOAD SOURCE BEGIN ===")
+    _LOGGER.debug(source)
+    _LOGGER.debug("=== RELOAD SOURCE END ===")
 
     # Exec new source in copy of the context of the old module
     ctxt = dict(vars(module))
     code = compile(source, source_filename, "exec")
 
     try:
-        IS_RESTARTING_MODULE.val = True
-        HOT_RESTART_MODULE_RELOAD_CONTEXT.val[module_name] = ctxt
+        _IS_RESTARTING_MODULE.val = True
+        _HOT_RESTART_MODULE_RELOAD_CONTEXT.val[module_name] = ctxt
         exec(code, ctxt, ctxt)
     finally:
-        IS_RESTARTING_MODULE.val = False
-        del HOT_RESTART_MODULE_RELOAD_CONTEXT.val[module_name]
+        _IS_RESTARTING_MODULE.val = False
+        del _HOT_RESTART_MODULE_RELOAD_CONTEXT.val[module_name]
 
     for k, v in ctxt.items():
         setattr(module, k, v)
@@ -1023,5 +1023,4 @@ __all__ = [
     "restart_module",
     "reload_module",
     "is_restarting_module",
-    "RELOAD_ON_CONTINUE",
 ]
