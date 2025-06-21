@@ -1055,6 +1055,7 @@ __all__ = [
     "wrap",
     "no_wrap",
     "wrap_module",
+    "wrap_modules",
     "wrap_class",
     "exit",
     "reraise",
