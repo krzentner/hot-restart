@@ -38,7 +38,7 @@ _LOGGER = setup_logger()
 # Global configuration
 
 ## Automatically reload code on continue.
-_RELOAD_ON_CONTINUE = True
+RELOAD_ON_CONTINUE = True
 
 ## Print the help message when first opening pdb
 PRINT_HELP_MESSAGE = True
@@ -725,7 +725,7 @@ def wrap(
                     _LOGGER.warning(f"Re-raising {e!r}")
                     _EXIT_THIS_FRAME = False
                     raise e
-                elif _RELOAD_ON_CONTINUE:
+                elif RELOAD_ON_CONTINUE:
                     new_func = reload_function(def_path, _FUNC_BASE[def_path_str])
                     if new_func is not None:
                         print(f"> Reloaded {new_func!r}")
@@ -1050,7 +1050,7 @@ def restart_module(module_or_name=None):
 # Convenient alias
 reload_module = restart_module
 
-
+# Useful values for `from hot_restart import *`
 __all__ = [
     "wrap",
     "no_wrap",
@@ -1059,11 +1059,13 @@ __all__ = [
     "wrap_class",
     "exit",
     "reraise",
-    "DEBUGGER",
-    "PROGRAM_SHOULD_EXIT",
-    "PRINT_HELP_MESSAGE",
     "ReloadException",
     "restart_module",
     "reload_module",
     "is_restarting_module",
 ]
+
+# Also publicly available, but not useful to import via *
+# DEBUGGER
+# PROGRAM_SHOULD_EXIT
+# PRINT_HELP_MESSAGE
