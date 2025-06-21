@@ -32,7 +32,8 @@ class Inner(Parent):
 
         # hi :)
         z = y_inner**2
-        mini()
+        # mini()
+        k = []
         k.append(z)
         return z**2, k
 
@@ -49,7 +50,7 @@ def outer_fn():
     @hot_restart.wrap
     @functools.cache
     def inner_fn(s, y):
-        assert False
+        # assert False
         print("y", y)
         print("x", x)
         print(s)

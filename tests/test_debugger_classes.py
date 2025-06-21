@@ -15,10 +15,10 @@ class TestHotRestartPdb:
         """Test that HotRestartPdb initializes correctly"""
         pdb_instance = HotRestartPdb()
         # Should inherit from pdb.Pdb
-        assert hasattr(pdb_instance, 'cmdloop')
+        assert hasattr(pdb_instance, "cmdloop")
         # Should have custom methods
-        assert hasattr(pdb_instance, '_cmdloop')
-        assert hasattr(pdb_instance, 'set_quit')
+        assert hasattr(pdb_instance, "_cmdloop")
+        assert hasattr(pdb_instance, "set_quit")
 
     def test_set_quit(self):
         """Test the set_quit method"""
@@ -34,17 +34,17 @@ class TestHotRestartPdb:
         # Test passes if no crash occurs
         assert True
 
-    @patch('pdb.Pdb.cmdloop')
+    @patch("pdb.Pdb.cmdloop")
     def test_cmdloop_calls_parent_and_checks_exit(self, mock_parent_cmdloop):
         """Test that _cmdloop calls parent cmdloop and checks for exit"""
         pdb_instance = HotRestartPdb()
 
         # Mock the global _EXIT_THIS_FRAME
-        with patch('hot_restart._EXIT_THIS_FRAME', None):
+        with patch("hot_restart._EXIT_THIS_FRAME", None):
             pdb_instance._cmdloop()
             mock_parent_cmdloop.assert_called_once()
 
-    @patch('pdb.Pdb.cmdloop')
+    @patch("pdb.Pdb.cmdloop")
     def test_cmdloop_exits_when_exit_frame_set(self, mock_parent_cmdloop):
         """Test that _cmdloop exits when _EXIT_THIS_FRAME is set"""
         pdb_instance = HotRestartPdb()
@@ -52,7 +52,7 @@ class TestHotRestartPdb:
         pdb_instance.stopframe = None
 
         # Mock _EXIT_THIS_FRAME to be True
-        with patch('hot_restart._EXIT_THIS_FRAME', True):
+        with patch("hot_restart._EXIT_THIS_FRAME", True):
             try:
                 pdb_instance._cmdloop()
             except Exception:
@@ -64,6 +64,7 @@ class TestHotRestartPdb:
     def test_inheritance_from_pdb(self):
         """Test that HotRestartPdb properly inherits from pdb.Pdb"""
         import pdb
+
         pdb_instance = HotRestartPdb()
         assert isinstance(pdb_instance, pdb.Pdb)
 
@@ -112,11 +113,12 @@ class TestHotRestartIpdb:
         try:
             # Try to access the function that contains the class
             from hot_restart import _start_ipdb_post_mortem
+
             assert _start_ipdb_post_mortem is not None
         except ImportError:
             pytest.skip("ipdb not available")
 
-    @patch('hot_restart.ipdb', create=True)
+    @patch("hot_restart.ipdb", create=True)
     def test_ipdb_integration(self, mock_ipdb):
         """Test that ipdb integration works when ipdb is available"""
         # Mock ipdb module
@@ -144,21 +146,24 @@ class TestDebuggerSelection:
     def test_choose_debugger_function_exists(self):
         """Test that _choose_debugger function exists and is callable"""
         from hot_restart import _choose_debugger
+
         assert callable(_choose_debugger)
 
-    @patch.dict('os.environ', {'HOT_RESTART_DEBUGGER': 'pdb'})
+    @patch.dict("os.environ", {"HOT_RESTART_DEBUGGER": "pdb"})
     def test_debugger_selection_with_env_var(self):
         """Test debugger selection respects environment variable"""
         from hot_restart import _choose_debugger
-        result = _choose_debugger()
-        assert result == 'pdb'
 
-    @patch.dict('os.environ', {'HOT_RESTART_DEBUGGER': 'ipdb'})
+        result = _choose_debugger()
+        assert result == "pdb"
+
+    @patch.dict("os.environ", {"HOT_RESTART_DEBUGGER": "ipdb"})
     def test_debugger_selection_ipdb_env_var(self):
         """Test debugger selection with ipdb environment variable"""
         from hot_restart import _choose_debugger
+
         result = _choose_debugger()
-        assert result == 'ipdb'
+        assert result == "ipdb"
 
     @pytest.mark.isolate
     def test_debugger_fallback_to_pdb(self):
@@ -166,19 +171,20 @@ class TestDebuggerSelection:
         import os
         import sys
         from unittest.mock import patch
-        
+
         # Clear environment and ensure ipdb import fails
-        os.environ.pop('HOT_RESTART_DEBUGGER', None)
-        
+        os.environ.pop("HOT_RESTART_DEBUGGER", None)
+
         # Remove ipdb from sys.modules to ensure fresh import attempt
-        sys.modules.pop('ipdb', None)
-        
+        sys.modules.pop("ipdb", None)
+
         # Mock ipdb module to not exist
-        with patch.dict('sys.modules', {'ipdb': None}):
+        with patch.dict("sys.modules", {"ipdb": None}):
             # Now import and test
             from hot_restart import _choose_debugger
+
             result = _choose_debugger()
-            assert result == 'pdb'
+            assert result == "pdb"
 
 
 class TestTracebackHandling:
@@ -187,6 +193,7 @@ class TestTracebackHandling:
     def test_create_undead_traceback_exists(self):
         """Test that _create_undead_traceback function exists"""
         from hot_restart import _create_undead_traceback
+
         assert callable(_create_undead_traceback)
 
     def test_create_undead_traceback_with_real_traceback(self):

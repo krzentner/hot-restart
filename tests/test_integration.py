@@ -16,6 +16,7 @@ class TestModuleIntegration:
 
     def test_wrap_and_reload_integration(self):
         """Test that wrap and reload work together"""
+
         # Create a simple function to wrap
         def sample_function(x):
             return x * 2
@@ -27,10 +28,11 @@ class TestModuleIntegration:
         assert wrapped_func(5) == 10
 
         # Should have the wrapped attribute
-        assert hasattr(wrapped_func, '_hot_restart_already_wrapped')
+        assert hasattr(wrapped_func, "_hot_restart_already_wrapped")
 
     def test_wrap_class_integration(self):
         """Test that wrap_class works with real classes"""
+
         @hot_restart.wrap
         class TestClass:
             def method1(self):
@@ -44,17 +46,18 @@ class TestModuleIntegration:
         assert obj.method2(4) == 12
 
         # Methods should be wrapped
-        assert hasattr(obj.method1, '__wrapped__')
-        assert hasattr(obj.method2, '__wrapped__')
+        assert hasattr(obj.method1, "__wrapped__")
+        assert hasattr(obj.method2, "__wrapped__")
 
     def test_no_wrap_decorator_integration(self):
         """Test that no_wrap decorator prevents wrapping"""
+
         @hot_restart.no_wrap
         def unwrapped_function():
             return "not wrapped"
 
         # Function should have the no-wrap marker
-        assert hasattr(unwrapped_function, '_hot_restart_no_wrap')
+        assert hasattr(unwrapped_function, "_hot_restart_no_wrap")
         assert unwrapped_function._hot_restart_no_wrap is True
 
         # Function should still work
@@ -85,11 +88,11 @@ class TestModuleIntegration:
     def test_debugger_selection_integration(self):
         """Test that debugger selection works"""
         # Should have a valid debugger
-        assert hot_restart.DEBUGGER in ('pdb', 'ipdb', 'pudb', 'pydevd')
+        assert hot_restart.DEBUGGER in ("pdb", "ipdb", "pudb", "pydevd")
 
         # Should be able to call the selection function
         result = hot_restart._choose_debugger()
-        assert result in ('pdb', 'ipdb', 'pudb', 'pydevd')
+        assert result in ("pdb", "ipdb", "pudb", "pydevd")
 
 
 class TestASTIntegration:
@@ -112,7 +115,8 @@ class TestASTIntegration:
         # Should be able to find function definitions
         finder = hot_restart.FindDefPath("test_function", 2)
         finder.visit(tree)
-        assert len(finder.found_def_paths) > 0
+        best_match = finder.get_best_match()
+        assert best_match == ["test_function"]
 
     def test_surrogate_source_generation_integration(self):
         """Test that surrogate source generation works end-to-end"""
@@ -134,6 +138,7 @@ class TestASTIntegration:
 
     def test_function_path_detection_integration(self):
         """Test function path detection with real functions"""
+
         def test_func():
             return "test"
 
@@ -180,19 +185,19 @@ class TestErrorHandling:
     def test_module_globals_accessibility(self):
         """Test that module globals are accessible as expected"""
         # Public globals should be accessible
-        assert hasattr(hot_restart, 'DEBUGGER')
-        assert hasattr(hot_restart, 'PROGRAM_SHOULD_EXIT')
-        assert hasattr(hot_restart, 'PRINT_HELP_MESSAGE')
+        assert hasattr(hot_restart, "DEBUGGER")
+        assert hasattr(hot_restart, "PROGRAM_SHOULD_EXIT")
+        assert hasattr(hot_restart, "PRINT_HELP_MESSAGE")
 
         # Private globals should exist but not be in __all__
-        assert hasattr(hot_restart, '_LOGGER')
-        assert hasattr(hot_restart, '_FUNC_NOW')
-        assert hasattr(hot_restart, '_FUNC_BASE')
+        assert hasattr(hot_restart, "_LOGGER")
+        assert hasattr(hot_restart, "_FUNC_NOW")
+        assert hasattr(hot_restart, "_FUNC_BASE")
 
         # Private globals should not be in __all__
-        assert '_LOGGER' not in hot_restart.__all__
-        assert '_FUNC_NOW' not in hot_restart.__all__
-        assert '_FUNC_BASE' not in hot_restart.__all__
+        assert "_LOGGER" not in hot_restart.__all__
+        assert "_FUNC_NOW" not in hot_restart.__all__
+        assert "_FUNC_BASE" not in hot_restart.__all__
 
 
 class TestThreadSafety:
@@ -201,9 +206,9 @@ class TestThreadSafety:
     def test_thread_local_variables(self):
         """Test that thread-local variables are properly initialized"""
         # These should be thread-local objects
-        assert hasattr(hot_restart._IS_RESTARTING_MODULE, 'val')
-        assert hasattr(hot_restart._HOT_RESTART_MODULE_RELOAD_CONTEXT, 'val')
-        assert hasattr(hot_restart._HOT_RESTART_IN_SURROGATE_CONTEXT, 'val')
+        assert hasattr(hot_restart._IS_RESTARTING_MODULE, "val")
+        assert hasattr(hot_restart._HOT_RESTART_MODULE_RELOAD_CONTEXT, "val")
+        assert hasattr(hot_restart._HOT_RESTART_IN_SURROGATE_CONTEXT, "val")
 
         # Should have default values
         assert hot_restart._IS_RESTARTING_MODULE.val is False
@@ -228,12 +233,11 @@ class TestModuleAPI:
             assert hasattr(hot_restart, name), f"Missing public API: {name}"
             attr = getattr(hot_restart, name)
             # Should be callable or a module constant
-            assert (callable(attr) or
-                   isinstance(attr, (str, bool, type, type(None))))
+            assert callable(attr) or isinstance(attr, (str, bool, type, type(None)))
 
     def test_module_version(self):
         """Test that module has version information"""
-        assert hasattr(hot_restart, '__version__')
+        assert hasattr(hot_restart, "__version__")
         assert isinstance(hot_restart.__version__, str)
         assert len(hot_restart.__version__) > 0
 
@@ -246,6 +250,7 @@ class TestModuleAPI:
         """Test that setup_logger creates proper logger"""
         logger = hot_restart.setup_logger()
         import logging
+
         assert isinstance(logger, logging.Logger)
         assert logger.name == "hot-restart"
 
@@ -255,6 +260,7 @@ class TestCompatibility:
 
     def test_inspect_integration(self):
         """Test integration with inspect module"""
+
         # Should work with inspect functions
         def test_func():
             pass
@@ -368,11 +374,11 @@ class TestMemoryManagement:
 
         # Caches should be modifiable
         original_size = len(hot_restart._FUNC_NOW)
-        hot_restart._FUNC_NOW['test_key'] = lambda: None
+        hot_restart._FUNC_NOW["test_key"] = lambda: None
         assert len(hot_restart._FUNC_NOW) == original_size + 1
 
         # Clean up
-        del hot_restart._FUNC_NOW['test_key']
+        del hot_restart._FUNC_NOW["test_key"]
 
 
 class TestRealWorldUsage:
@@ -380,6 +386,7 @@ class TestRealWorldUsage:
 
     def test_basic_decorator_usage(self):
         """Test basic decorator usage pattern"""
+
         @hot_restart.wrap
         def add_numbers(a, b):
             return a + b
@@ -389,6 +396,7 @@ class TestRealWorldUsage:
 
     def test_class_decoration_usage(self):
         """Test class decoration usage pattern"""
+
         @hot_restart.wrap
         class Calculator:
             def add(self, a, b):

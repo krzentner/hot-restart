@@ -9,7 +9,7 @@ from hot_restart import (
     SuperRewriteTransformer,
     SurrogateTransformer,
     LineNoResetter,
-    FindTargetNode
+    FindTargetNode,
 )
 
 
@@ -30,9 +30,8 @@ class TestFindDefPath:
         finder.visit(tree)
 
         # Should find the function at the correct path
-        assert len(finder.found_def_paths) > 0
-        # The path should contain the function name
-        assert finder.found_def_paths[0][-1] == "my_function"
+        best_match = finder.get_best_match()
+        assert best_match == ["my_function"]
 
     def test_function_not_found(self):
         """Test that non-existent functions return None path"""
@@ -45,7 +44,8 @@ class TestFindDefPath:
         finder.visit(tree)
 
         # Should not find the function
-        assert len(finder.found_def_paths) == 0
+        best_match = finder.get_best_match()
+        assert best_match == []
 
     def test_find_nested_function(self):
         """Test finding a nested function definition"""
@@ -60,8 +60,8 @@ class TestFindDefPath:
         finder.visit(tree)
 
         # Should find the nested function
-        assert len(finder.found_def_paths) > 0
-        assert finder.found_def_paths[0][-1] == "inner_function"
+        best_match = finder.get_best_match()
+        assert best_match == ["outer_function", "inner_function"]
 
     def test_find_class_method(self):
         """Test finding a method within a class"""
@@ -78,8 +78,8 @@ class TestFindDefPath:
         finder.visit(tree)
 
         # Should find the method
-        assert len(finder.found_def_paths) > 0
-        assert finder.found_def_paths[0][-1] == "my_method"
+        best_match = finder.get_best_match()
+        assert best_match == ["MyClass", "my_method"]
 
     def test_initialization(self):
         """Test FindDefPath initialization"""
@@ -87,6 +87,7 @@ class TestFindDefPath:
         assert finder.target_name == "test_func"
         assert finder.target_lineno == 1
         assert finder.found_def_paths == []
+        assert finder.candidates == []
 
 
 class TestSuperRewriteTransformer:
@@ -220,7 +221,7 @@ class TestLineNoResetter:
         # Get original line numbers
         original_lines = []
         for node in ast.walk(tree):
-            if hasattr(node, 'lineno'):
+            if hasattr(node, "lineno"):
                 original_lines.append(node.lineno)
 
         # Reset line numbers
@@ -234,7 +235,7 @@ class TestLineNoResetter:
     def test_visit_without_lineno(self):
         """Test visiting nodes without line numbers doesn't crash"""
         # Create a simple AST node without line number
-        node = ast.Name(id='test', ctx=ast.Load())
+        node = ast.Name(id="test", ctx=ast.Load())
 
         resetter = LineNoResetter()
         result = resetter.visit(node)

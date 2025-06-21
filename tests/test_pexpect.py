@@ -131,6 +131,7 @@ def test_closure():
     child.sendline("c")
     exp(child, "y 2 x 1 test")
 
+
 def test_nested_functions():
     test_dir = "nested_functions"
     tmp = mktmp(test_dir)
@@ -139,7 +140,7 @@ def test_nested_functions():
     exp(child, DEBUGGER_PROMPT)
     assert check_line_number(child.before, 8)
     # Send ctrl-c
-    child.sendcontrol('c')
+    child.sendcontrol("c")
     assert check_line_number(child.before, 8)
     copy(test_dir, "in_2.py", tmp)
     child.sendline("c")

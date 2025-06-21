@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Test script to check if warnings are suppressed when wrapping modules/classes"""
+
 import sys
 import io
 import logging
@@ -22,20 +23,23 @@ my_lambda = lambda x: x + 1
 # Built-in function reference
 my_builtin = print
 
+
 # Regular function that can be wrapped
 def regular_function():
     return "This function has source"
+
 
 # Class with methods
 class MyClass:
     # Lambda as class attribute
     class_lambda = lambda self, x: x * 2
-    
+
     def regular_method(self):
         return "Regular method"
-    
+
     # Built-in reference as attribute
     builtin_ref = len
+
 
 print("Testing wrap_module...")
 hot_restart.wrap_module()
@@ -60,7 +64,7 @@ try:
 except:
     pass
 
-# Get the captured log output  
+# Get the captured log output
 explicit_wrap_output = log_capture.getvalue()
 print(f"Explicit wrap warnings: {repr(explicit_wrap_output)}")
 
@@ -68,7 +72,7 @@ print(f"Explicit wrap warnings: {repr(explicit_wrap_output)}")
 if "Could not" in module_wrap_output:
     print("FAIL: Found warnings in module wrap output")
     sys.exit(1)
-    
+
 if "Could not" not in explicit_wrap_output:
     print("FAIL: No warnings found in explicit wrap output")
     sys.exit(1)

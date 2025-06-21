@@ -23,6 +23,9 @@ import types
 import re
 import os
 
+# Check debug logging once at module load
+DEBUG_LOG = os.environ.get("HOT_RESTART_DEBUG_LOG", "")
+
 
 def setup_logger():
     logger = logging.getLogger("hot-restart")
@@ -30,10 +33,51 @@ def setup_logger():
     formatter = logging.Formatter("%(levelname)s (%(name)s): %(message)s")
     handler.setFormatter(formatter)
     logger.addHandler(handler)
-    logger.setLevel(logging.WARN)
+
+    # Add file handler if debug log is enabled
+    debug_log_path = DEBUG_LOG
+    if debug_log_path:
+        file_handler = logging.FileHandler(debug_log_path, mode="a")
+        detailed_formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s"
+        )
+        file_handler.setFormatter(detailed_formatter)
+        file_handler.setLevel(logging.DEBUG)
+        logger.addHandler(file_handler)
+
+    logger.setLevel(logging.DEBUG)
     return logger
 
+
 _LOGGER = setup_logger()
+
+
+def _debug_dump_reload_info(
+    func_name,
+    def_path,
+    source_file,
+    source_text,
+    module_ast,
+    transformed_ast,
+    surrogate_source,
+    error=None,
+):
+    """Dump detailed reload information when debug logging is enabled."""
+    if DEBUG_LOG:
+        _LOGGER.debug("=" * 80)
+        _LOGGER.debug(f"RELOAD ATTEMPT: {func_name}")
+        _LOGGER.debug(f"Def Path: {def_path}")
+        _LOGGER.debug(f"Source File: {source_file}")
+        _LOGGER.debug(f"Source Text Length: {len(source_text)} chars")
+        _LOGGER.debug(f"Module AST:\n{ast.dump(module_ast, indent=2)}")
+        if transformed_ast:
+            _LOGGER.debug(f"Transformed AST:\n{ast.dump(transformed_ast, indent=2)}")
+        if surrogate_source:
+            _LOGGER.debug(f"Surrogate Source:\n{surrogate_source}")
+        if error:
+            _LOGGER.debug(f"Error: {error}")
+        _LOGGER.debug("=" * 80)
+
 
 # Global configuration
 
@@ -45,6 +89,7 @@ PRINT_HELP_MESSAGE = True
 
 ## Causes program to exit.
 PROGRAM_SHOULD_EXIT = False
+
 
 def _choose_debugger():
     # Check environment variable first
@@ -69,12 +114,14 @@ def _choose_debugger():
     # No graphical debugger, see if we can import ipdb, and use it if so
     try:
         import ipdb  # noqa: F401
+
         return "ipdb"
     except ImportError:
         pass
 
     # Default to pdb
     return "pdb"
+
 
 ## Debugger to use
 DEBUGGER = _choose_debugger()
@@ -115,7 +162,9 @@ class HotRestartPdb(pdb.Pdb):
 
     def set_quit(self):
         reraise()
-        print("Exitting debugging one level. Call hot_restart.exit() to exit the program.")
+        print(
+            "Exitting debugging one level. Call hot_restart.exit() to exit the program."
+        )
         super().set_quit()
 
 
@@ -165,30 +214,87 @@ class FindDefPath(ast.NodeVisitor):
         self.target_lineno = target_lineno
         self.found_def_paths = []
         self.path_now = []
+        # Track candidates with their overlap scores
+        self.candidates = []
 
     def generic_visit(self, node: ast.AST) -> Any:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             self.path_now.append(node)
-            start_lineno = min(
-                [node.lineno] + [dec.lineno for dec in node.decorator_list]
-            )
-            end_lineno = getattr(node, "end_lineno", 0)
+            current_path = [n.name for n in self.path_now]
+            if DEBUG_LOG:
+                _LOGGER.debug(
+                    f"FindDefPath visiting {node.name} at line {node.lineno}, current path: {current_path}"
+                )
+
             if node.name == self.target_name:
-                if (
-                    start_lineno <= self.target_lineno
-                    and self.target_lineno <= end_lineno
-                ):
-                    self.found_def_paths.append([node.name for node in self.path_now])
+                # Calculate the full range including decorators
+                if hasattr(node, "decorator_list") and node.decorator_list:
+                    start_lineno = min(dec.lineno for dec in node.decorator_list)
                 else:
-                    _LOGGER.debug("Found matching name to def at wrong lineno:")
+                    start_lineno = node.lineno
+                end_lineno = getattr(node, "end_lineno", node.lineno)
+
+                # Calculate overlap with target line
+                # We consider a single line (target_lineno) overlapping with the range [start, end]
+                if start_lineno <= self.target_lineno <= end_lineno:
+                    # Exact match - overlap score is 1
+                    overlap_score = 1
+                else:
+                    # No direct overlap, but record distance for potential fuzzy matching
+                    # Negative score based on distance
+                    if self.target_lineno < start_lineno:
+                        overlap_score = -abs(start_lineno - self.target_lineno)
+                    else:
+                        overlap_score = -abs(self.target_lineno - end_lineno)
+
+                self.candidates.append(
+                    {
+                        "path": [node.name for node in self.path_now],
+                        "score": overlap_score,
+                        "start": start_lineno,
+                        "end": end_lineno,
+                    }
+                )
+
+                if DEBUG_LOG:
+                    _LOGGER.debug(
+                        f"FindDefPath candidate {self.target_name} at path {current_path}:"
+                    )
                     _LOGGER.debug(f"    target_lineno = {self.target_lineno}")
                     _LOGGER.debug(f"    start_lineno = {start_lineno}")
                     _LOGGER.debug(f"    end_lineno = {end_lineno}")
+                    _LOGGER.debug(f"    overlap_score = {overlap_score}")
+
             res = super().generic_visit(node)
             self.path_now.pop()
             return res
         else:
             return super().generic_visit(node)
+
+    def get_best_match(self):
+        """Get the best matching path based on overlap scores."""
+        if not self.candidates:
+            return []
+
+        # Sort by score (highest first)
+        sorted_candidates = sorted(
+            self.candidates, key=lambda x: x["score"], reverse=True
+        )
+        best = sorted_candidates[0]
+
+        if DEBUG_LOG and len(sorted_candidates) > 1:
+            _LOGGER.debug(f"FindDefPath multiple candidates for {self.target_name}:")
+            for i, cand in enumerate(sorted_candidates):
+                _LOGGER.debug(
+                    f"  {i + 1}. {cand['path']} (score={cand['score']}, lines {cand['start']}-{cand['end']})"
+                )
+            _LOGGER.debug(f"  Selected: {best['path']}")
+
+        # Only return paths with positive scores (actual overlap)
+        # or the closest match if all scores are negative
+        if best["score"] > 0 or all(c["score"] <= 0 for c in self.candidates):
+            return best["path"]
+        return []
 
 
 class SuperRewriteTransformer(ast.NodeTransformer):
@@ -259,9 +365,18 @@ class SurrogateTransformer(ast.NodeTransformer):
         self.free_vars = free_vars
 
     def visit_Module(self, node: ast.Module) -> ast.Module:
-        return ast.Module(
+        if DEBUG_LOG:
+            _LOGGER.debug(
+                f"SurrogateTransformer.visit_Module: starting depth={self.depth}, target_path={self.target_path}"
+            )
+        result = ast.Module(
             body=self.visit_body(node.body), type_ignores=node.type_ignores
         )
+        if DEBUG_LOG:
+            _LOGGER.debug(
+                f"SurrogateTransformer.visit_Module: result body length={len(result.body)}"
+            )
+        return result
 
     def visit_ClassDef(self, node: ast.ClassDef) -> Optional[ast.ClassDef]:
         if node.name != self.target_path[self.depth]:
@@ -280,6 +395,11 @@ class SurrogateTransformer(ast.NodeTransformer):
         )
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> Optional[list[ast.AST]]:
+        if DEBUG_LOG:
+            _LOGGER.debug(
+                f"SurrogateTransformer.visit_FunctionDef: node={node.name}, depth={self.depth}, target_path={self.target_path}"
+            )
+
         if node.name != self.target_path[self.depth]:
             return None
 
@@ -427,12 +547,27 @@ def build_surrogate_source(source_text, module_ast, def_path, free_vars):
     lineno as in the ast, with the same parent class(es), but with all other
     lines empty.
     """
+    if DEBUG_LOG:
+        _LOGGER.debug(
+            f"build_surrogate_source: def_path={def_path}, free_vars={free_vars}"
+        )
+        _LOGGER.debug(f"build_surrogate_source: source_text length={len(source_text)}")
+
     SuperRewriteTransformer().visit(module_ast)
     trans = SurrogateTransformer(target_path=def_path, free_vars=free_vars)
 
     new_ast = trans.visit(module_ast)
     new_ast = ast.fix_missing_locations(new_ast)
     transformed_source = ast.unparse(new_ast)
+
+    if DEBUG_LOG:
+        _LOGGER.debug(
+            f"build_surrogate_source: transformed AST body length={len(new_ast.body)}"
+        )
+        _LOGGER.debug(
+            f"build_surrogate_source: transformed source length={len(transformed_source)}"
+        )
+
     # Re-parse to get updated lineno
     # TODO: Find a way to do this without reparsing
     node_finder = FindTargetNode(def_path)
@@ -447,6 +582,23 @@ def build_surrogate_source(source_text, module_ast, def_path, free_vars):
         _LOGGER.error(source_text)
         _LOGGER.error("=== END SOURCE TEXT ===")
         _LOGGER.error(ast.dump(new_ast, indent=2))
+        _LOGGER.error("=== BEGIN TRANSFORMED SOURCE TEXT ===")
+        _LOGGER.error(transformed_source)
+        _LOGGER.error("=== END TRANSFORMED SOURCE TEXT ===")
+
+        if DEBUG_LOG:
+            # Dump comprehensive debug info
+            _debug_dump_reload_info(
+                func_name=def_path_str,
+                def_path=def_path,
+                source_file="<unknown>",
+                source_text=source_text,
+                module_ast=module_ast,
+                transformed_ast=new_ast,
+                surrogate_source=transformed_source,
+                error=msg,
+            )
+
         raise ReloadException(msg)
     if len(target_nodes) > 1:
         _LOGGER.error(f"Overlapping definitions of {def_path_str} in source")
@@ -483,6 +635,14 @@ def _get_def_path(func, _recursive=False) -> Optional[list[str]]:
         )
 
     source_filename = inspect.getsourcefile(unwrapped_func)
+    if DEBUG_LOG:
+        _LOGGER.debug(
+            f"_get_def_path: func={func!r}, source_filename={source_filename}"
+        )
+        _LOGGER.debug(
+            f"_get_def_path: func.__name__={unwrapped_func.__name__}, lineno={unwrapped_func.__code__.co_firstlineno}"
+        )
+
     if source_filename == "<string>" or source_filename is None:
         raise ReloadException(f"{func!r} was generated and has no source")
     with open(source_filename, "r") as f:
@@ -492,18 +652,24 @@ def _get_def_path(func, _recursive=False) -> Optional[list[str]]:
     func_lineno = unwrapped_func.__code__.co_firstlineno
     visitor = FindDefPath(target_name=func_name, target_lineno=func_lineno)
     visitor.visit(module_ast)
-    if len(visitor.found_def_paths) == 0:
+
+    # Use the new get_best_match method
+    def_path = visitor.get_best_match()
+
+    if DEBUG_LOG:
+        _LOGGER.debug(f"_get_def_path: best match def_path={def_path}")
+
+    if not def_path:
         if not _recursive:
             _LOGGER.error(f"Could not find definition of {unwrapped_func!r}")
             _LOGGER.debug(ast.dump(module_ast, indent=2))
         return None
-    def_path = visitor.found_def_paths[0]
     # Check that we can build a surrogate source for this func
     if _CHECK_FOR_SOURCE_ON_LOAD:
         build_surrogate_source(
             source_content, module_ast, def_path, unwrapped_func.__code__.co_freevars
         )
-    return visitor.found_def_paths[0]
+    return def_path
 
 
 def reload_function(def_path: list[str], func):
@@ -517,7 +683,19 @@ def reload_function(def_path: list[str], func):
     def_str = ".".join(def_path)
     unwrapped_func = inspect.unwrap(func)
     source_filename = inspect.getsourcefile(unwrapped_func)
+    original_source_filename = source_filename
     source_filename = _TMP_SOURCE_ORIGINAL_MAP.get(source_filename, source_filename)
+
+    if DEBUG_LOG:
+        _LOGGER.debug(f"reload_function: def_path={def_path}, def_str={def_str}")
+        _LOGGER.debug(
+            f"reload_function: original_source_filename={original_source_filename}"
+        )
+        _LOGGER.debug(f"reload_function: mapped_source_filename={source_filename}")
+        _LOGGER.debug(
+            f"reload_function: _TMP_SOURCE_ORIGINAL_MAP={_TMP_SOURCE_ORIGINAL_MAP}"
+        )
+
     _LOGGER.debug(f"Reloading {def_str} from {source_filename}")
     try:
         with open(source_filename, "r") as f:
@@ -631,9 +809,9 @@ def wrap(
     propagate_keyboard_interrupt: bool = True,
     _recursive: bool = False,
 ):
-    assert isinstance(
-        propagated_exceptions, tuple
-    ), "propagated_exceptions should be a tuple of exception types"
+    assert isinstance(propagated_exceptions, tuple), (
+        "propagated_exceptions should be a tuple of exception types"
+    )
 
     if func is None:
         return functools.partial(
@@ -670,12 +848,12 @@ def wrap(
         return func
 
     if _def_path is None:
+        error_msg = f"Could not get definition path for {func!r}"
         if not _recursive:
-            _LOGGER.error(f"Could not get definition path for {func!r}")
-        # Assume it's the trivial path
-        def_path = [func.__name__]
-    else:
-        def_path = _def_path
+            _LOGGER.error(error_msg)
+        raise ReloadException(error_msg)
+
+    def_path = _def_path
     def_path_str = ".".join([func.__module__] + def_path)
 
     if inspect.unwrap(func) is not func:
@@ -795,6 +973,7 @@ def _start_ipdb_post_mortem(def_path_str, excinfo, num_dead_frames):
 
     import ipdb  # noqa: F401
     from IPython.terminal.debugger import TerminalPdb
+
     class HotRestartIpdb(TerminalPdb):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -806,9 +985,10 @@ def _start_ipdb_post_mortem(def_path_str, excinfo, num_dead_frames):
 
         def set_quit(self):
             reraise()
-            print("Exitting debugging one level. Call hot_restart.exit() to exit the program.")
+            print(
+                "Exitting debugging one level. Call hot_restart.exit() to exit the program."
+            )
             super().set_quit()
-
 
     _, e, tb = excinfo
     # Print basic commands
@@ -992,7 +1172,7 @@ def wrap_modules(pattern):
         # Check if module name matches the pattern
         if fnmatch.fnmatch(module_name, pattern):
             # Skip built-in modules and modules without a file
-            if hasattr(module, '__file__') and module.__file__:
+            if hasattr(module, "__file__") and module.__file__:
                 modules_to_wrap.append((module_name, module))
 
     _LOGGER.info(f"Found {len(modules_to_wrap)} modules matching pattern {pattern!r}")

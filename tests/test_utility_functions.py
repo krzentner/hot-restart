@@ -18,7 +18,7 @@ from hot_restart import (
     reraise,
     no_wrap,
     is_restarting_module,
-    setup_logger
+    setup_logger,
 )
 
 
@@ -59,7 +59,9 @@ class TestBuildSurrogateSource:
         """)
         closure_vars = {"x": 10, "y": 20}
         tree = hot_restart._parse_src(source)
-        result = build_surrogate_source(source, tree, ["test_function"], list(closure_vars.keys()))
+        result = build_surrogate_source(
+            source, tree, ["test_function"], list(closure_vars.keys())
+        )
         assert isinstance(result, str)
         assert "test_function" in result
 
@@ -85,7 +87,7 @@ class TestMergeSources:
             original_start_lineno=0,
             original_end_lineno=1,
             surrogate_start_lineno=0,
-            surrogate_end_lineno=1
+            surrogate_end_lineno=1,
         )
         assert isinstance(result, str)
 
@@ -99,7 +101,7 @@ class TestMergeSources:
             original_start_lineno=0,
             original_end_lineno=2,
             surrogate_start_lineno=0,
-            surrogate_end_lineno=2
+            surrogate_end_lineno=2,
         )
         assert isinstance(result, str)
 
@@ -111,7 +113,7 @@ class TestMergeSources:
             original_start_lineno=0,
             original_end_lineno=0,
             surrogate_start_lineno=0,
-            surrogate_end_lineno=1
+            surrogate_end_lineno=1,
         )
         assert isinstance(result1, str)
 
@@ -121,7 +123,7 @@ class TestMergeSources:
             original_start_lineno=0,
             original_end_lineno=1,
             surrogate_start_lineno=0,
-            surrogate_end_lineno=0
+            surrogate_end_lineno=0,
         )
         assert isinstance(result2, str)
 
@@ -131,7 +133,7 @@ class TestMergeSources:
             original_start_lineno=0,
             original_end_lineno=0,
             surrogate_start_lineno=0,
-            surrogate_end_lineno=0
+            surrogate_end_lineno=0,
         )
         assert isinstance(result3, str)
 
@@ -162,6 +164,7 @@ class TestGetDefPath:
 
     def test_get_def_path_existing_function(self):
         """Test getting definition path for existing function"""
+
         def target_function():
             return 42
 
@@ -176,6 +179,7 @@ class TestGetDefPath:
 
     def test_get_def_path_nonexistent_function(self):
         """Test getting definition path for non-existent function"""
+
         def other_function():
             pass
 
@@ -189,6 +193,7 @@ class TestGetDefPath:
 
     def test_get_def_path_with_class(self):
         """Test getting definition path for method in class"""
+
         class MyClass:
             def my_method(self):
                 return 42
@@ -207,6 +212,7 @@ class TestReloadFunction:
 
     def test_reload_function_with_real_function(self):
         """Test reloading a real function (integration test)"""
+
         def sample_function():
             return "original"
 
@@ -225,10 +231,11 @@ class TestReloadFunction:
 class TestExitFunction:
     """Test the exit function"""
 
-    @patch('hot_restart.PROGRAM_SHOULD_EXIT', False)
+    @patch("hot_restart.PROGRAM_SHOULD_EXIT", False)
     def test_exit_sets_global_flag(self):
         """Test that exit() sets the global exit flag"""
         import hot_restart
+
         exit()
         # Should set the flag (we can't easily test this due to module globals)
         assert True  # Function should not crash
@@ -243,16 +250,18 @@ class TestNoWrapDecorator:
 
     def test_no_wrap_decorator(self):
         """Test that no_wrap decorator works"""
+
         @no_wrap
         def test_function():
             return 42
 
         # Should add the no-wrap attribute
-        assert hasattr(test_function, '_hot_restart_no_wrap')
+        assert hasattr(test_function, "_hot_restart_no_wrap")
         assert test_function._hot_restart_no_wrap is True
 
     def test_no_wrap_preserves_function(self):
         """Test that no_wrap preserves original function behavior"""
+
         @no_wrap
         def test_function(x, y):
             return x + y
@@ -263,13 +272,14 @@ class TestNoWrapDecorator:
 
     def test_no_wrap_with_class_method(self):
         """Test no_wrap on class methods"""
+
         class TestClass:
             @no_wrap
             def method(self):
                 return "test"
 
         obj = TestClass()
-        assert hasattr(obj.method, '_hot_restart_no_wrap')
+        assert hasattr(obj.method, "_hot_restart_no_wrap")
         assert obj.method() == "test"
 
 
@@ -294,14 +304,15 @@ class TestModuleUtilities:
         import hot_restart
 
         # These should be accessible (part of public API via __all__)
-        assert hasattr(hot_restart, 'DEBUGGER')
-        assert hasattr(hot_restart, 'PROGRAM_SHOULD_EXIT')
-        assert hasattr(hot_restart, 'PRINT_HELP_MESSAGE')
+        assert hasattr(hot_restart, "DEBUGGER")
+        assert hasattr(hot_restart, "PROGRAM_SHOULD_EXIT")
+        assert hasattr(hot_restart, "PRINT_HELP_MESSAGE")
 
     def test_version_exists(self):
         """Test that version information exists"""
         import hot_restart
-        assert hasattr(hot_restart, '__version__')
+
+        assert hasattr(hot_restart, "__version__")
         assert isinstance(hot_restart.__version__, str)
 
     def test_all_public_functions_callable(self):
@@ -318,25 +329,25 @@ class TestModuleUtilities:
 class TestFileOperations:
     """Test file-related operations"""
 
-    @patch('builtins.open', new_callable=mock_open, read_data='def test(): pass')
+    @patch("builtins.open", new_callable=mock_open, read_data="def test(): pass")
     def test_file_reading_operations(self, mock_file):
         """Test file reading operations don't crash"""
         # This tests that file operations in the module work with mocked files
         content = mock_file().read()
-        assert content == 'def test(): pass'
+        assert content == "def test(): pass"
 
     def test_temporary_file_operations(self):
         """Test operations with temporary files"""
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
             f.write('def temp_function(): return "temp"')
             temp_path = f.name
 
         try:
             # File should exist and be readable
             assert os.path.exists(temp_path)
-            with open(temp_path, 'r') as f:
+            with open(temp_path, "r") as f:
                 content = f.read()
-                assert 'temp_function' in content
+                assert "temp_function" in content
         finally:
             os.unlink(temp_path)
 
