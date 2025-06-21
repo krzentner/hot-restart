@@ -6,6 +6,7 @@ import ast
 import tempfile
 import os
 import hot_restart
+from textwrap import dedent
 from unittest.mock import Mock, patch, mock_open
 from hot_restart import (
     build_surrogate_source,
@@ -27,10 +28,10 @@ class TestBuildSurrogateSource:
     def test_build_surrogate_source_basic(self):
         """Test building surrogate source for a simple function"""
 
-        source = """
-def test_function():
-    return 42
-"""
+        source = dedent("""
+            def test_function():
+                return 42
+        """)
         tree = hot_restart._parse_src(source)
         result = build_surrogate_source(source, tree, ["test_function"], [])
         assert isinstance(result, str)
@@ -39,10 +40,10 @@ def test_function():
     def test_build_surrogate_source_with_args(self):
         """Test building surrogate source with function arguments"""
 
-        source = """
-def test_function(a, b):
-    return a + b
-"""
+        source = dedent("""
+            def test_function(a, b):
+                return a + b
+        """)
         func_args = ["a", "b"]
         tree = hot_restart._parse_src(source)
         result = build_surrogate_source(source, tree, ["test_function"], func_args)
@@ -52,10 +53,10 @@ def test_function(a, b):
     def test_build_surrogate_source_with_closure(self):
         """Test building surrogate source with closure variables"""
 
-        source = """
-def test_function():
-    return x + y
-"""
+        source = dedent("""
+            def test_function():
+                return x + y
+        """)
         closure_vars = {"x": 10, "y": 20}
         tree = hot_restart._parse_src(source)
         result = build_surrogate_source(source, tree, ["test_function"], list(closure_vars.keys()))

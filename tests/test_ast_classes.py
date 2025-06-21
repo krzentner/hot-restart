@@ -3,6 +3,7 @@
 
 import ast
 import pytest
+from textwrap import dedent
 from hot_restart import (
     FindDefPath,
     SuperRewriteTransformer,
@@ -17,13 +18,13 @@ class TestFindDefPath:
 
     def test_find_function_def(self):
         """Test finding a function definition by name"""
-        code = """
-def my_function():
-    pass
+        code = dedent("""
+            def my_function():
+                pass
 
-def another_function():
-    return 42
-"""
+            def another_function():
+                return 42
+        """)
         tree = ast.parse(code)
         finder = FindDefPath("my_function", 2)
         finder.visit(tree)
@@ -35,10 +36,10 @@ def another_function():
 
     def test_function_not_found(self):
         """Test that non-existent functions return None path"""
-        code = """
-def other_function():
-    pass
-"""
+        code = dedent("""
+            def other_function():
+                pass
+        """)
         tree = ast.parse(code)
         finder = FindDefPath("nonexistent_function", 2)
         finder.visit(tree)
@@ -48,12 +49,12 @@ def other_function():
 
     def test_find_nested_function(self):
         """Test finding a nested function definition"""
-        code = """
-def outer_function():
-    def inner_function():
-        return 42
-    return inner_function()
-"""
+        code = dedent("""
+            def outer_function():
+                def inner_function():
+                    return 42
+                return inner_function()
+        """)
         tree = ast.parse(code)
         finder = FindDefPath("inner_function", 3)
         finder.visit(tree)
@@ -64,14 +65,14 @@ def outer_function():
 
     def test_find_class_method(self):
         """Test finding a method within a class"""
-        code = """
-class MyClass:
-    def my_method(self):
-        return 42
+        code = dedent("""
+            class MyClass:
+                def my_method(self):
+                    return 42
 
-    def another_method(self):
-        pass
-"""
+                def another_method(self):
+                    pass
+        """)
         tree = ast.parse(code)
         finder = FindDefPath("my_method", 3)
         finder.visit(tree)
@@ -98,10 +99,10 @@ class TestSuperRewriteTransformer:
 
     def test_visit_class_def(self):
         """Test that class definitions are tracked in the stack"""
-        code = """
-class MyClass:
-    pass
-"""
+        code = dedent("""
+            class MyClass:
+                pass
+        """)
         tree = ast.parse(code)
         transformer = SuperRewriteTransformer()
         transformer.visit(tree)
@@ -111,10 +112,10 @@ class MyClass:
 
     def test_visit_function_def(self):
         """Test that function definitions are processed correctly"""
-        code = """
-def my_function():
-    pass
-"""
+        code = dedent("""
+            def my_function():
+                pass
+        """)
         tree = ast.parse(code)
         transformer = SuperRewriteTransformer()
         new_tree = transformer.visit(tree)
@@ -124,11 +125,11 @@ def my_function():
 
     def test_super_call_detection(self):
         """Test that super() calls are detected and can be transformed"""
-        code = """
-class MyClass:
-    def method(self):
-        return super().method()
-"""
+        code = dedent("""
+            class MyClass:
+                def method(self):
+                    return super().method()
+        """)
         tree = ast.parse(code)
         transformer = SuperRewriteTransformer()
         transformer.visit(tree)
@@ -138,12 +139,12 @@ class MyClass:
 
     def test_nested_classes(self):
         """Test handling of nested classes"""
-        code = """
-class OuterClass:
-    class InnerClass:
-        def method(self):
-            return super().method()
-"""
+        code = dedent("""
+            class OuterClass:
+                class InnerClass:
+                    def method(self):
+                        return super().method()
+        """)
         tree = ast.parse(code)
         transformer = SuperRewriteTransformer()
         transformer.visit(tree)
@@ -163,10 +164,10 @@ class TestSurrogateTransformer:
 
     def test_visit_module(self):
         """Test module transformation"""
-        code = """
-def test_function():
-    return 42
-"""
+        code = dedent("""
+            def test_function():
+                return 42
+        """)
         tree = ast.parse(code)
         transformer = SurrogateTransformer(["test_function"], [])
         new_tree = transformer.visit(tree)
@@ -176,11 +177,11 @@ def test_function():
 
     def test_visit_class_def(self):
         """Test class definition transformation"""
-        code = """
-class TestClass:
-    def method(self):
-        return 42
-"""
+        code = dedent("""
+            class TestClass:
+                def method(self):
+                    return 42
+        """)
         tree = ast.parse(code)
         transformer = SurrogateTransformer(["method"], [])
         new_tree = transformer.visit(tree)
@@ -190,13 +191,13 @@ class TestClass:
 
     def test_visit_function_def(self):
         """Test function definition transformation"""
-        code = """
-def target_function():
-    return 42
+        code = dedent("""
+            def target_function():
+                return 42
 
-def other_function():
-    return 24
-"""
+            def other_function():
+                return 24
+        """)
         tree = ast.parse(code)
         transformer = SurrogateTransformer(["target_function"], [])
         new_tree = transformer.visit(tree)
@@ -210,10 +211,10 @@ class TestLineNoResetter:
 
     def test_line_number_reset(self):
         """Test that line numbers are reset during AST visit"""
-        code = """
-def test_func():
-    return 42
-"""
+        code = dedent("""
+            def test_func():
+                return 42
+        """)
         tree = ast.parse(code)
 
         # Get original line numbers
@@ -253,8 +254,10 @@ class TestFindTargetNode:
 
     def test_find_target_node_by_name_and_line(self):
         """Test finding a node by name and line number"""
-        code = """def target_func():
-    pass"""
+        code = dedent("""
+            def target_func():
+                pass
+        """)
         tree = ast.parse(code)
 
         finder = FindTargetNode(["target_func"])
@@ -267,8 +270,10 @@ class TestFindTargetNode:
 
     def test_target_not_found_wrong_name(self):
         """Test that wrong function name returns None"""
-        code = """def other_func():
-    pass"""
+        code = dedent("""
+            def other_func():
+                pass
+        """)
         tree = ast.parse(code)
 
         finder = FindTargetNode(["target_func"])
@@ -279,8 +284,10 @@ class TestFindTargetNode:
 
     def test_target_not_found_wrong_line(self):
         """Test that wrong line number returns None"""
-        code = """def target_func():
-    pass"""
+        code = dedent("""
+            def target_func():
+                pass
+        """)
         tree = ast.parse(code)
 
         finder = FindTargetNode(["target_func"])
@@ -292,11 +299,11 @@ class TestFindTargetNode:
 
     def test_find_class_method(self):
         """Test finding a class method by name and line"""
-        code = """
-class MyClass:
-    def target_func(self):
-        pass
-"""
+        code = dedent("""
+            class MyClass:
+                def target_func(self):
+                    pass
+        """)
         tree = ast.parse(code)
 
         # Find the method - need full path including class name
@@ -310,13 +317,13 @@ class MyClass:
 
     def test_multiple_functions_same_name(self):
         """Test behavior with multiple functions of the same name"""
-        code = """
-def target_func():  # Line 2
-    pass
+        code = dedent("""
+            def target_func():  # Line 2
+                pass
 
-def target_func():  # Line 5
-    return 42
-"""
+            def target_func():  # Line 5
+                return 42
+        """)
         tree = ast.parse(code)
 
         # Should find both functions with the same name

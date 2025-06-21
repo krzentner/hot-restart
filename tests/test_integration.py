@@ -6,6 +6,7 @@ import tempfile
 import os
 import sys
 import inspect
+from textwrap import dedent
 from unittest.mock import Mock, patch, MagicMock
 import hot_restart
 
@@ -96,14 +97,14 @@ class TestASTIntegration:
 
     def test_ast_parsing_and_transformation_chain(self):
         """Test that AST parsing and transformation work together"""
-        source = """
-def test_function():
-    return 42
+        source = dedent("""
+            def test_function():
+                return 42
 
-class TestClass:
-    def method(self):
-        return super().method()
-"""
+            class TestClass:
+                def method(self):
+                    return super().method()
+        """)
         # Should be able to parse without errors
         tree = hot_restart._parse_src(source)
         assert tree is not None
@@ -115,10 +116,10 @@ class TestClass:
 
     def test_surrogate_source_generation_integration(self):
         """Test that surrogate source generation works end-to-end"""
-        source = """
-def target_function(x):
-    return x + 1
-"""
+        source = dedent("""
+            def target_function(x):
+                return x + 1
+        """)
         try:
             tree = hot_restart._parse_src(source)
             result = hot_restart.build_surrogate_source(
@@ -319,12 +320,12 @@ class TestEdgeCases:
 
     def test_nested_function_detection(self):
         """Test detection of nested functions"""
-        source = """
-def outer():
-    def inner():
-        return 42
-    return inner()
-"""
+        source = dedent("""
+            def outer():
+                def inner():
+                    return 42
+                return inner()
+        """)
         tree = hot_restart._parse_src(source)
         finder = hot_restart.FindDefPath("inner", 3)
         finder.visit(tree)
@@ -333,15 +334,15 @@ def outer():
 
     def test_class_method_detection(self):
         """Test detection of class methods"""
-        source = """
-class MyClass:
-    def method(self):
-        return 42
+        source = dedent("""
+            class MyClass:
+                def method(self):
+                    return 42
 
-    @staticmethod
-    def static_method():
-        return 24
-"""
+                @staticmethod
+                def static_method():
+                    return 24
+        """)
         tree = hot_restart._parse_src(source)
         finder = hot_restart.FindDefPath("method", 3)
         finder.visit(tree)
