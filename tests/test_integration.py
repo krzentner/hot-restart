@@ -113,7 +113,7 @@ class TestASTIntegration:
         assert tree is not None
 
         # Should be able to find function definitions
-        finder = hot_restart.FindDefPath("test_function", 2)
+        finder = hot_restart.FindDefPath("test_function", 2, 3)
         finder.visit(tree)
         best_match = finder.get_best_match()
         assert best_match == ["test_function"]
@@ -285,7 +285,7 @@ class TestCompatibility:
         assert isinstance(tree, ast.Module)
 
         # Our AST classes should work with standard ast module
-        visitor = hot_restart.FindDefPath("test", 1)
+        visitor = hot_restart.FindDefPath("test", 1, 1)
         visitor.visit(tree)
         # Should not crash
 
@@ -333,10 +333,11 @@ class TestEdgeCases:
                 return inner()
         """)
         tree = hot_restart._parse_src(source)
-        finder = hot_restart.FindDefPath("inner", 3)
+        finder = hot_restart.FindDefPath("inner", 3, 4)
         finder.visit(tree)
         # Should find nested function
-        assert len(finder.found_def_paths) >= 0  # May or may not find it
+        best_match = finder.get_best_match()
+        assert best_match == ["outer", "inner"]
 
     def test_class_method_detection(self):
         """Test detection of class methods"""
@@ -350,7 +351,7 @@ class TestEdgeCases:
                     return 24
         """)
         tree = hot_restart._parse_src(source)
-        finder = hot_restart.FindDefPath("method", 3)
+        finder = hot_restart.FindDefPath("method", 3, 4)
         finder.visit(tree)
         # Should find method
         assert len(finder.found_def_paths) >= 0

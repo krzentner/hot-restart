@@ -22,16 +22,16 @@ def test_exact_overlap():
     tree = ast.parse(code)
 
     # func1 is at line 2
-    visitor1 = FindDefPath("func1", 2)
+    visitor1 = FindDefPath("func1", 2, 2)
     visitor1.visit(tree)
     assert visitor1.get_best_match() == ["func1"]
 
     # func2 decorator is at line 5, def at line 6
-    visitor2 = FindDefPath("func2", 5)  # Decorator line
+    visitor2 = FindDefPath("func2", 5, 5)  # Decorator line
     visitor2.visit(tree)
     assert visitor2.get_best_match() == ["func2"]
 
-    visitor3 = FindDefPath("func2", 6)  # Def line
+    visitor3 = FindDefPath("func2", 6, 6)  # Def line
     visitor3.visit(tree)
     assert visitor3.get_best_match() == ["func2"]
 
@@ -53,7 +53,7 @@ def test_off_by_one_matching():
     # Decorator is at line 5, function at line 6
     # Test various line numbers
     for line in [4, 5, 6, 7]:
-        visitor = FindDefPath("func", line)
+        visitor = FindDefPath("func", line, line)
         visitor.visit(tree)
         result = visitor.get_best_match()
 
@@ -86,17 +86,17 @@ def test_nested_function_matching():
     tree = ast.parse(code)
 
     # inner function decorators start at line 4, def at line 6
-    visitor = FindDefPath("inner", 4)
+    visitor = FindDefPath("inner", 4, 4)
     visitor.visit(tree)
     assert visitor.get_best_match() == ["outer", "inner"]
 
     # Test with off-by-one
-    visitor2 = FindDefPath("inner", 3)  # One line before decorator
+    visitor2 = FindDefPath("inner", 3, 3)  # One line before decorator
     visitor2.visit(tree)
     assert visitor2.get_best_match() == ["outer", "inner"]
 
     # Test with line after function
-    visitor3 = FindDefPath("inner", 7)  # One line after def
+    visitor3 = FindDefPath("inner", 7, 7)  # One line after def
     visitor3.visit(tree)
     assert visitor3.get_best_match() == ["outer", "inner"]
 
@@ -122,22 +122,22 @@ def test_multiple_candidates():
     tree = ast.parse(code)
 
     # Looking for line 3 should find outer1.inner
-    visitor1 = FindDefPath("inner", 3)
+    visitor1 = FindDefPath("inner", 3, 3)
     visitor1.visit(tree)
     assert visitor1.get_best_match() == ["outer1", "inner"]
 
     # Looking for line 7 (decorator) or 8 (def) should find outer2.inner
-    visitor2 = FindDefPath("inner", 7)
+    visitor2 = FindDefPath("inner", 7, 7)
     visitor2.visit(tree)
     assert visitor2.get_best_match() == ["outer2", "inner"]
 
     # Looking for line 12 should find MyClass.inner
-    visitor3 = FindDefPath("inner", 12)
+    visitor3 = FindDefPath("inner", 12, 12)
     visitor3.visit(tree)
     assert visitor3.get_best_match() == ["MyClass", "inner"]
 
     # Looking for line 5 (between functions) should find closest
-    visitor4 = FindDefPath("inner", 5)
+    visitor4 = FindDefPath("inner", 5, 5)
     visitor4.visit(tree)
     # This is closer to outer1.inner (distance 2) than outer2.inner (distance 2 to decorator)
     # But since they're equal distance, it depends on visit order
@@ -166,7 +166,7 @@ def test_multiline_decorator_matching():
     # Function def at line 8
 
     for line in range(1, 10):
-        visitor = FindDefPath("func", line)
+        visitor = FindDefPath("func", line, line)
         visitor.visit(tree)
         result = visitor.get_best_match()
 
@@ -191,9 +191,12 @@ def test_no_match_returns_empty():
 
     tree = ast.parse(code)
 
-    visitor = FindDefPath("nonexistent", 5)
+    visitor = FindDefPath("nonexistent", 5, 5)
     visitor.visit(tree)
-    assert visitor.get_best_match() == []
+    
+    # Should raise ReloadException when no function found
+    with pytest.raises(ReloadException):
+        visitor.get_best_match()
 
 
 def test_integration_with_wrap():
@@ -228,28 +231,28 @@ def test_integration_with_wrap():
         fake_code = fake_func.__code__.replace(co_firstlineno=999)
         fake_func.__code__ = fake_code
 
-        # This should raise ReloadException because the function won't be found
-        with pytest.raises(ReloadException) as exc_info:
-            # We need to mock getsourcefile to return our temp file
-            import inspect
+        # wrap() doesn't raise ReloadException, it logs error and returns original function
+        import inspect
+        import logging
 
-            original_getsourcefile = inspect.getsourcefile
+        original_getsourcefile = inspect.getsourcefile
 
-            def mock_getsourcefile(obj):
-                if obj is fake_func or (
-                    hasattr(obj, "__wrapped__") and obj.__wrapped__ is fake_func
-                ):
-                    return f.name
-                return original_getsourcefile(obj)
+        def mock_getsourcefile(obj):
+            if obj is fake_func or (
+                hasattr(obj, "__wrapped__") and obj.__wrapped__ is fake_func
+            ):
+                return f.name
+            return original_getsourcefile(obj)
 
-            inspect.getsourcefile = mock_getsourcefile
-            try:
-                wrap(fake_func)
-            finally:
-                inspect.getsourcefile = original_getsourcefile
-                os.unlink(f.name)
-
-    assert "Could not get definition path" in str(exc_info.value)
+        inspect.getsourcefile = mock_getsourcefile
+        try:
+            # wrap() logs error and returns original function when it can't find it
+            result = wrap(fake_func)
+            # Should return the original function unchanged
+            assert result is fake_func
+        finally:
+            inspect.getsourcefile = original_getsourcefile
+            os.unlink(f.name)
 
 
 if __name__ == "__main__":

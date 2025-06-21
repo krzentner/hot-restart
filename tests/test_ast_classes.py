@@ -10,6 +10,7 @@ from hot_restart import (
     SurrogateTransformer,
     LineNoResetter,
     FindTargetNode,
+    ReloadException,
 )
 
 
@@ -26,7 +27,7 @@ class TestFindDefPath:
                 return 42
         """)
         tree = ast.parse(code)
-        finder = FindDefPath("my_function", 2)
+        finder = FindDefPath("my_function", 2, 3)
         finder.visit(tree)
 
         # Should find the function at the correct path
@@ -34,18 +35,18 @@ class TestFindDefPath:
         assert best_match == ["my_function"]
 
     def test_function_not_found(self):
-        """Test that non-existent functions return None path"""
+        """Test that non-existent functions raise ReloadException"""
         code = dedent("""
             def other_function():
                 pass
         """)
         tree = ast.parse(code)
-        finder = FindDefPath("nonexistent_function", 2)
+        finder = FindDefPath("nonexistent_function", 2, 2)
         finder.visit(tree)
 
-        # Should not find the function
-        best_match = finder.get_best_match()
-        assert best_match == []
+        # Should raise exception when function not found
+        with pytest.raises(ReloadException):
+            finder.get_best_match()
 
     def test_find_nested_function(self):
         """Test finding a nested function definition"""
@@ -56,7 +57,7 @@ class TestFindDefPath:
                 return inner_function()
         """)
         tree = ast.parse(code)
-        finder = FindDefPath("inner_function", 3)
+        finder = FindDefPath("inner_function", 3, 4)
         finder.visit(tree)
 
         # Should find the nested function
@@ -74,7 +75,7 @@ class TestFindDefPath:
                     pass
         """)
         tree = ast.parse(code)
-        finder = FindDefPath("my_method", 3)
+        finder = FindDefPath("my_method", 3, 4)
         finder.visit(tree)
 
         # Should find the method
@@ -83,11 +84,73 @@ class TestFindDefPath:
 
     def test_initialization(self):
         """Test FindDefPath initialization"""
-        finder = FindDefPath("test_func", 1)
+        finder = FindDefPath("test_func", 1, 5)
         assert finder.target_name == "test_func"
-        assert finder.target_lineno == 1
+        assert finder.target_first_lineno == 1
+        assert finder.target_last_lineno == 5
         assert finder.found_def_paths == []
         assert finder.candidates == []
+
+    def test_overlap_scoring(self):
+        """Test that overlap scoring works correctly"""
+        code = dedent("""
+            def my_function():  # Line 2
+                x = 1
+                y = 2
+                return x + y  # Line 5
+        """)
+        tree = ast.parse(code)
+        
+        # Test exact match
+        finder = FindDefPath("my_function", 2, 5)
+        finder.visit(tree)
+        best_match = finder.get_best_match()
+        assert best_match == ["my_function"]
+        
+        # Test partial overlap
+        finder = FindDefPath("my_function", 3, 4)
+        finder.visit(tree)
+        best_match = finder.get_best_match()
+        assert best_match == ["my_function"]
+        
+    def test_decorator_line_handling(self):
+        """Test that decorators are included in line range"""
+        code = dedent("""
+            @decorator1  # Line 2
+            @decorator2  # Line 3
+            def my_function():  # Line 4
+                return 42  # Line 5
+        """)
+        tree = ast.parse(code)
+        
+        # Test that decorator lines are included
+        finder = FindDefPath("my_function", 2, 5)
+        finder.visit(tree)
+        best_match = finder.get_best_match()
+        assert best_match == ["my_function"]
+        assert len(finder.candidates) == 1
+        
+    def test_multiple_candidates_scoring(self):
+        """Test scoring when multiple functions have same name"""
+        code = dedent("""
+            def target():  # Lines 2-3
+                pass
+                
+            class Foo:
+                def target():  # Lines 6-7
+                    pass
+                    
+            def target():  # Lines 9-10
+                pass
+        """)
+        tree = ast.parse(code)
+        
+        # Should find the second target function based on line overlap
+        finder = FindDefPath("target", 6, 7)
+        finder.visit(tree)
+        best_match = finder.get_best_match()
+        assert best_match == ["Foo", "target"]
+        assert len(finder.candidates) == 3  # All three target functions
 
 
 class TestSuperRewriteTransformer:

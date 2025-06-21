@@ -22,9 +22,21 @@ from typing import Any, Optional
 import types
 import re
 import os
+from dataclasses import dataclass
+import dis
 
 # Check debug logging once at module load
 DEBUG_LOG = os.environ.get("HOT_RESTART_DEBUG_LOG", "")
+
+
+@dataclass
+class Candidate:
+    """Represents a candidate function match with overlap scoring."""
+
+    path: list[str]
+    score: int
+    start: int
+    end: int
 
 
 def setup_logger():
@@ -208,10 +220,13 @@ class FindDefPath(ast.NodeVisitor):
     This gives a more durable identity to a function than its original line number.
     """
 
-    def __init__(self, target_name: str, target_lineno: int):
+    def __init__(
+        self, target_name: str, target_first_lineno: int, target_last_lineno: int
+    ):
         super().__init__()
         self.target_name = target_name
-        self.target_lineno = target_lineno
+        self.target_first_lineno = target_first_lineno
+        self.target_last_lineno = target_last_lineno
         self.found_def_paths = []
         self.path_now = []
         # Track candidates with their overlap scores
@@ -234,26 +249,33 @@ class FindDefPath(ast.NodeVisitor):
                     start_lineno = node.lineno
                 end_lineno = getattr(node, "end_lineno", node.lineno)
 
-                # Calculate overlap with target line
-                # We consider a single line (target_lineno) overlapping with the range [start, end]
-                if start_lineno <= self.target_lineno <= end_lineno:
-                    # Exact match - overlap score is 1
-                    overlap_score = 1
+                # Calculate overlap with target line range
+                target_start = self.target_first_lineno
+                target_end = self.target_last_lineno
+
+                # Calculate overlap between [start_lineno, end_lineno] and [target_start, target_end]
+                overlap_start = max(start_lineno, target_start)
+                overlap_end = min(end_lineno, target_end)
+
+                if overlap_start <= overlap_end:
+                    # There is overlap - score based on overlap size
+                    overlap_size = overlap_end - overlap_start + 1
+                    overlap_score = overlap_size
                 else:
                     # No direct overlap, but record distance for potential fuzzy matching
                     # Negative score based on distance
-                    if self.target_lineno < start_lineno:
-                        overlap_score = -abs(start_lineno - self.target_lineno)
+                    if self.target_last_lineno < start_lineno:
+                        overlap_score = -abs(start_lineno - self.target_last_lineno)
                     else:
-                        overlap_score = -abs(self.target_lineno - end_lineno)
+                        overlap_score = -abs(self.target_first_lineno - end_lineno)
 
                 self.candidates.append(
-                    {
-                        "path": [node.name for node in self.path_now],
-                        "score": overlap_score,
-                        "start": start_lineno,
-                        "end": end_lineno,
-                    }
+                    Candidate(
+                        path=[node.name for node in self.path_now],
+                        score=overlap_score,
+                        start=start_lineno,
+                        end=end_lineno,
+                    )
                 )
 
                 if DEBUG_LOG:
@@ -271,30 +293,25 @@ class FindDefPath(ast.NodeVisitor):
         else:
             return super().generic_visit(node)
 
-    def get_best_match(self):
+    def get_best_match(self) -> list[str]:
         """Get the best matching path based on overlap scores."""
         if not self.candidates:
-            return []
+            raise ReloadException(
+                f"Could not find {self.target_name} in its source file"
+            )
 
         # Sort by score (highest first)
-        sorted_candidates = sorted(
-            self.candidates, key=lambda x: x["score"], reverse=True
-        )
+        sorted_candidates = sorted(self.candidates, key=lambda x: x.score, reverse=True)
         best = sorted_candidates[0]
 
         if DEBUG_LOG and len(sorted_candidates) > 1:
             _LOGGER.debug(f"FindDefPath multiple candidates for {self.target_name}:")
             for i, cand in enumerate(sorted_candidates):
                 _LOGGER.debug(
-                    f"  {i + 1}. {cand['path']} (score={cand['score']}, lines {cand['start']}-{cand['end']})"
+                    f"  {i + 1}. {cand.path} (score={cand.score}, lines {cand.start}-{cand.end})"
                 )
-            _LOGGER.debug(f"  Selected: {best['path']}")
-
-        # Only return paths with positive scores (actual overlap)
-        # or the closest match if all scores are negative
-        if best["score"] > 0 or all(c["score"] <= 0 for c in self.candidates):
-            return best["path"]
-        return []
+            _LOGGER.debug(f"  Selected: {best.path}")
+        return best.path
 
 
 class SuperRewriteTransformer(ast.NodeTransformer):
@@ -458,7 +475,7 @@ class SurrogateTransformer(ast.NodeTransformer):
                 new_nodes.append(result)
         return new_nodes
 
-    def generic_visit(self, node: ast.AST) -> Optional[ast.AST]:
+    def generic_visit(self, node: ast.AST) -> Optional[list[ast.stmt]]:
         if hasattr(node, "body") or hasattr(node, "orelse"):
             body = getattr(node, "body", [])
             orelse = getattr(node, "orelse", [])
@@ -517,8 +534,6 @@ class LineNoResetter(ast.NodeTransformer):
     def visit(self, node):
         node.lineno = None
         node.end_lineno = None
-        # if hasattr(node, "lineno"):
-        # if hasattr(node, "end_lineno"):
         return super().visit(node)
 
 
@@ -649,8 +664,17 @@ def _get_def_path(func, _recursive=False) -> Optional[list[str]]:
         source_content = f.read()
     module_ast = _parse_src(source_content)
     func_name = unwrapped_func.__name__
-    func_lineno = unwrapped_func.__code__.co_firstlineno
-    visitor = FindDefPath(target_name=func_name, target_lineno=func_lineno)
+    func_start_lineno = unwrapped_func.__code__.co_firstlineno
+    inst_positions = [int(inst.starts_line) for inst in dis.get_instructions(unwrapped_func) if getattr(inst, "starts_line", None)]
+    if inst_positions:
+        func_last_lineno = max(inst_positions)
+    else:
+        func_last_lineno = func_start_lineno + 1
+    visitor = FindDefPath(
+        target_name=func_name,
+        target_first_lineno=func_start_lineno,
+        target_last_lineno=func_last_lineno,
+    )
     visitor.visit(module_ast)
 
     # Use the new get_best_match method

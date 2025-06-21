@@ -90,12 +90,17 @@ def outer():
 
     # The original finder will fail because it calculates start_lineno
     # AFTER checking the name match
-    original_finder = hot_restart.FindDefPath("inner", 5)  # co_firstlineno would be 5
+    original_finder = hot_restart.FindDefPath("inner", 5, 5)  # co_firstlineno would be 5
     original_finder.visit(tree)
 
-    # This will be empty because it looks for line 5, but the FunctionDef is at line 6
-    print(f"Original finder result: {original_finder.found_def_paths}")
-    assert original_finder.found_def_paths == []  # Fails to find it!
+    # This should find the function now with the improved implementation
+    try:
+        result = original_finder.get_best_match()
+        print(f"Original finder result: {result}")
+        assert result == ["outer", "inner"]  # Should find it now!
+    except hot_restart.ReloadException:
+        print("Original finder failed to find function")
+        assert False, "Should have found the function"
 
     print("Confirmed: Original finder fails on decorated functions")
 
