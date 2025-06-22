@@ -56,8 +56,8 @@ def setup_logger():
         file_handler.setFormatter(detailed_formatter)
         file_handler.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
-
-    logger.setLevel(logging.DEBUG)
+    else:
+        logger.setLevel(logging.INFO)
     return logger
 
 
@@ -644,14 +644,14 @@ def _get_class_def_path(cls) -> Optional[list[str]]:
         _LOGGER.debug(
             f"_get_class_def_path: class={cls!r}, source_filename={source_filename}"
         )
-    
+
     if source_filename == "<string>" or source_filename is None:
         raise ReloadException(f"{cls!r} was generated and has no source")
-        
+
     with open(source_filename, "r") as f:
         source_content = f.read()
     module_ast = _parse_src(source_content)
-    
+
     # Get class source lines for line number
     try:
         source_lines, start_lineno = inspect.getsourcelines(cls)
@@ -660,20 +660,20 @@ def _get_class_def_path(cls) -> Optional[list[str]]:
     except (OSError, TypeError) as e:
         _LOGGER.error(f"Could not get source lines for {cls!r}: {e}")
         return None
-        
+
     visitor = FindDefPath(
         target_name=cls.__name__,
         target_first_lineno=start_lineno,
         target_last_lineno=end_lineno,
     )
     visitor.visit(module_ast)
-    
+
     # Use the new get_best_match method
     def_path = visitor.get_best_match()
-    
+
     if DEBUG_LOG:
         _LOGGER.debug(f"_get_class_def_path: best match def_path={def_path}")
-        
+
     return def_path
 
 
@@ -742,7 +742,7 @@ def _get_function_def_path(func, _recursive=False) -> Optional[list[str]]:
 
 def _get_def_path(func, _recursive=False) -> Optional[list[str]]:
     """Get the definition path for a function or class.
-    
+
     This is a dispatcher that delegates to the appropriate specialized function.
     """
     if inspect.isclass(func):
@@ -878,51 +878,51 @@ def reload_class(def_path: list[str], cls):
     that class reloaded from source.
     """
     def_str = ".".join(def_path)
-    
+
     # Get source file information
     source_filename = inspect.getsourcefile(cls)
     source_filename = _TMP_SOURCE_ORIGINAL_MAP.get(source_filename, source_filename)
-    
+
     if DEBUG_LOG:
         _LOGGER.debug(f"reload_class: def_path={def_path}, def_str={def_str}")
         _LOGGER.debug(f"reload_class: source_filename={source_filename}")
-    
+
     _LOGGER.debug(f"Reloading class {def_str} from {source_filename}")
-    
+
     try:
         with open(source_filename, "r") as f:
             all_source = f.read()
     except (OSError, FileNotFoundError) as e:
         _LOGGER.error(f"Could not read source for {cls!r} from {source_filename}: {e!r}")
         return None
-        
+
     try:
         src_ast = ast.parse(all_source, filename=source_filename)
     except SyntaxError as e:
         _LOGGER.error(f"Could not parse source for {cls!r}: {e!r}")
         return None
-    
+
     module = inspect.getmodule(cls)
     if source_filename is None:
         _LOGGER.error(f"Could not reload {cls!r}: No known source file")
         return None
-        
+
     # Find the class definition in the AST
     finder = FindTargetNode(def_path)
     finder.visit(src_ast)
-    
+
     if not finder.target_nodes:
         _LOGGER.error(f"Could not find class {def_str} in source")
         return None
-    
+
     # Create a module containing just the class definition
     # We compile and exec the whole module to preserve imports and context
     code = compile(all_source, source_filename, "exec")
-    
+
     # Execute in module context to get the new class
     ctxt = dict(vars(module))
     exec(code, ctxt, ctxt)
-    
+
     # Navigate the def_path to find the reloaded class
     new_cls = ctxt
     for part in def_path:
@@ -930,39 +930,39 @@ def reload_class(def_path: list[str], cls):
         if new_cls is None:
             _LOGGER.error(f"Could not find {def_str} in reloaded module")
             return None
-            
+
     return new_cls
 
 
 def reload_all_wrapped():
     """Reload all wrapped functions and classes from their source files."""
     _LOGGER.info("Reloading all wrapped functions and classes")
-    
+
     # Reload all functions
     for def_path_str, base_func in list(_FUNC_BASE.items()):
         # Skip module prefix in def_path
         parts = def_path_str.split(".")
         module_name = parts[0]
         def_path = parts[1:]
-        
+
         new_func = reload_function(def_path, base_func)
         if new_func is not None:
             _FUNC_NOW[def_path_str] = new_func
             _LOGGER.debug(f"Reloaded function {def_path_str}")
         else:
             _LOGGER.warning(f"Failed to reload function {def_path_str}")
-    
+
     # Reload all classes
     for def_path_str, base_cls in list(_CLASS_BASE.items()):
         # Skip module prefix in def_path
         parts = def_path_str.split(".")
-        module_name = parts[0] 
+        module_name = parts[0]
         def_path = parts[1:]
-        
+
         new_cls = reload_class(def_path, base_cls)
         if new_cls is not None:
             _CLASS_NOW[def_path_str] = new_cls
-            
+
             # Wrap only new methods that aren't already wrapped
             for k, v in list(vars(new_cls).items()):
                 if callable(v) and not isinstance(v, type(len)):
@@ -971,7 +971,7 @@ def reload_all_wrapped():
                     if old_method is None or not getattr(old_method, _HOT_RESTART_ALREADY_WRAPPED, False):
                         _LOGGER.info(f"Wrapping new/updated method {new_cls!r}.{k}")
                         setattr(new_cls, k, wrap(v, _recursive=True))
-            
+
             # Update the class in its module namespace
             module = sys.modules.get(module_name)
             if module and len(def_path) == 1:
@@ -986,7 +986,7 @@ def reload_all_wrapped():
                         break
                 if parent is not None:
                     setattr(parent, def_path[-1], new_cls)
-                    
+
             _LOGGER.debug(f"Reloaded class {def_path_str}")
         else:
             _LOGGER.warning(f"Failed to reload class {def_path_str}")
@@ -1304,26 +1304,26 @@ ignore = no_wrap
 
 
 def wrap_class(cls):
-    _LOGGER.info(f"Wrapping class: {cls!r}")
-    
+    _LOGGER.debug(f"Wrapping class: {cls!r}")
+
     # Get definition path for the class
     try:
         def_path = _get_def_path(cls, _recursive=False)
         if def_path:
             def_path_str = ".".join([cls.__module__] + def_path)
             _LOGGER.debug(f"Registering class {def_path_str}")
-            
+
             # Only register as base if not already registered
             if def_path_str not in _CLASS_BASE:
                 _CLASS_BASE[def_path_str] = cls
             _CLASS_NOW[def_path_str] = cls
     except Exception as e:
         _LOGGER.warning(f"Could not get definition path for class {cls!r}: {e}")
-    
+
     # Wrap all methods
     for k, v in list(vars(cls).items()):
         if callable(v) and not isinstance(v, type(len)):  # Skip built-in functions
-            _LOGGER.info(f"Wrapping {cls!r}.{k}")
+            _LOGGER.debug(f"Wrapping {cls!r}.{k}")
             setattr(cls, k, wrap(v, _recursive=True))
     return cls
 
@@ -1344,30 +1344,30 @@ def wrap_module(module_or_name=None):
         module_name = module_or_name.__name__
         module_d = module_or_name.__dict__
     module_d = _HOT_RESTART_MODULE_RELOAD_CONTEXT.val.get(module_name, module_d)
-    _LOGGER.info(f"Wrapping module {module_name!r}")
+    _LOGGER.debug(f"Wrapping module {module_name!r}")
 
     out_d = {}
     for k, v in list(module_d.items()):
         if getattr(v, _HOT_RESTART_NO_WRAP, False):
-            _LOGGER.info(f"Skipping wrapping of no_wrap {v!r}")
+            _LOGGER.debug(f"Skipping wrapping of no_wrap {v!r}")
         elif getattr(v, _HOT_RESTART_ALREADY_WRAPPED, False):
-            _LOGGER.info(f"Skipping already wrapped {v!r}")
+            _LOGGER.debug(f"Skipping already wrapped {v!r}")
         elif inspect.isclass(v):
             v_module = inspect.getmodule(v)
             if v_module and v_module.__name__ == module_name:
-                _LOGGER.info(f"Wrapping class {v!r}")
+                _LOGGER.debug(f"Wrapping class {v!r}")
                 wrap_class(v)
             else:
-                _LOGGER.info(
+                _LOGGER.debug(
                     f"Not wrapping in-scope class {v!r} since it originates from {v_module} != {module_name}"
                 )
         elif callable(v) and not isinstance(v, type(len)):  # Skip built-in functions
             v_module = inspect.getmodule(v)
             if v_module and v_module.__name__ == module_name:
-                _LOGGER.info(f"Wrapping callable {v!r}")
+                _LOGGER.debug(f"Wrapping callable {v!r}")
                 out_d[k] = wrap(v, _recursive=True)
             else:
-                _LOGGER.info(
+                _LOGGER.debug(
                     f"Not wrapping in-scope callable {v!r} since it originates from {v_module} != {module_name}"
                 )
         else:
@@ -1388,7 +1388,7 @@ def wrap_modules(pattern):
     """
     import fnmatch
 
-    _LOGGER.info(f"Wrapping modules matching pattern: {pattern!r}")
+    _LOGGER.debug(f"Wrapping modules matching pattern: {pattern!r}")
 
     # Get all currently loaded modules
     modules_to_wrap = []
@@ -1402,12 +1402,12 @@ def wrap_modules(pattern):
             if hasattr(module, "__file__") and module.__file__:
                 modules_to_wrap.append((module_name, module))
 
-    _LOGGER.info(f"Found {len(modules_to_wrap)} modules matching pattern {pattern!r}")
+    _LOGGER.debug(f"Found {len(modules_to_wrap)} modules matching pattern {pattern!r}")
 
     # Wrap each matching module
     for module_name, module in modules_to_wrap:
         try:
-            _LOGGER.info(f"Wrapping module {module_name!r}")
+            _LOGGER.debug(f"Wrapping module {module_name!r}")
             wrap_module(module)
         except Exception as e:
             _LOGGER.warning(f"Failed to wrap module {module_name!r}: {e}")
