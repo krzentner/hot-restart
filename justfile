@@ -18,7 +18,7 @@ test-pdb: setup
 
 # Run all tests with ipdb
 test-ipdb: setup
-    HOT_RESTART_DEBUGGER=ipdb uv run pytest tests/ --isolate
+    uv run pytest tests/ --isolate
 
 # Run pytest tests with both debuggers
 test-both: setup
