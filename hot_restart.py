@@ -709,7 +709,11 @@ def _get_function_def_path(func, _recursive=False) -> Optional[list[str]]:
     module_ast = _parse_src(source_content)
     func_name = unwrapped_func.__name__
     func_start_lineno = unwrapped_func.__code__.co_firstlineno
-    inst_positions = [int(inst.starts_line) for inst in dis.get_instructions(unwrapped_func) if getattr(inst, "starts_line", None)]
+    inst_positions = [
+        int(inst.starts_line)
+        for inst in dis.get_instructions(unwrapped_func)
+        if getattr(inst, "starts_line", None)
+    ]
     if inst_positions:
         func_last_lineno = max(inst_positions)
     else:
@@ -893,7 +897,9 @@ def reload_class(def_path: list[str], cls):
         with open(source_filename, "r") as f:
             all_source = f.read()
     except (OSError, FileNotFoundError) as e:
-        _LOGGER.error(f"Could not read source for {cls!r} from {source_filename}: {e!r}")
+        _LOGGER.error(
+            f"Could not read source for {cls!r} from {source_filename}: {e!r}"
+        )
         return None
 
     try:
@@ -968,7 +974,9 @@ def reload_all_wrapped():
                 if callable(v) and not isinstance(v, type(len)):
                     # Check if this method exists in the old class and is already wrapped
                     old_method = getattr(base_cls, k, None)
-                    if old_method is None or not getattr(old_method, _HOT_RESTART_ALREADY_WRAPPED, False):
+                    if old_method is None or not getattr(
+                        old_method, _HOT_RESTART_ALREADY_WRAPPED, False
+                    ):
                         _LOGGER.info(f"Wrapping new/updated method {new_cls!r}.{k}")
                         setattr(new_cls, k, wrap(v, _recursive=True))
 

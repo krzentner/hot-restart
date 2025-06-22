@@ -100,19 +100,19 @@ class TestFindDefPath:
                 return x + y  # Line 5
         """)
         tree = ast.parse(code)
-        
+
         # Test exact match
         finder = FindDefPath("my_function", 2, 5)
         finder.visit(tree)
         best_match = finder.get_best_match()
         assert best_match == ["my_function"]
-        
+
         # Test partial overlap
         finder = FindDefPath("my_function", 3, 4)
         finder.visit(tree)
         best_match = finder.get_best_match()
         assert best_match == ["my_function"]
-        
+
     def test_decorator_line_handling(self):
         """Test that decorators are included in line range"""
         code = dedent("""
@@ -122,14 +122,14 @@ class TestFindDefPath:
                 return 42  # Line 5
         """)
         tree = ast.parse(code)
-        
+
         # Test that decorator lines are included
         finder = FindDefPath("my_function", 2, 5)
         finder.visit(tree)
         best_match = finder.get_best_match()
         assert best_match == ["my_function"]
         assert len(finder.candidates) == 1
-        
+
     def test_multiple_candidates_scoring(self):
         """Test scoring when multiple functions have same name"""
         code = dedent("""
@@ -144,7 +144,7 @@ class TestFindDefPath:
                 pass
         """)
         tree = ast.parse(code)
-        
+
         # Should find the second target function based on line overlap
         finder = FindDefPath("target", 6, 7)
         finder.visit(tree)

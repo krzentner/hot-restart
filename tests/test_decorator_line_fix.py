@@ -90,7 +90,9 @@ def outer():
 
     # The original finder will fail because it calculates start_lineno
     # AFTER checking the name match
-    original_finder = hot_restart.FindDefPath("inner", 5, 5)  # co_firstlineno would be 5
+    original_finder = hot_restart.FindDefPath(
+        "inner", 5, 5
+    )  # co_firstlineno would be 5
     original_finder.visit(tree)
 
     # This should find the function now with the improved implementation

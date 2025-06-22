@@ -193,7 +193,7 @@ def test_no_match_returns_empty():
 
     visitor = FindDefPath("nonexistent", 5, 5)
     visitor.visit(tree)
-    
+
     # Should raise ReloadException when no function found
     with pytest.raises(ReloadException):
         visitor.get_best_match()
