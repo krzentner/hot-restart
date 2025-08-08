@@ -40,7 +40,7 @@ class Candidate:
 
 
 def setup_logger():
-    logger = logging.getLogger("hot-restart")
+    logger = logging.getLogger("hot_restart")
     handler = logging.StreamHandler(sys.stderr)
     formatter = logging.Formatter("%(levelname)s (%(name)s): %(message)s")
     handler.setFormatter(formatter)

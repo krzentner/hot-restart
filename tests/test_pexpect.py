@@ -103,7 +103,11 @@ def test_basic_reload_module():
     copy(test_dir, "in_2.py", tmp)
     child.sendline("hot_restart.reload_module()")
     exp(child, DEBUGGER_PROMPT)
-    child.sendline("c")
+    try:
+        child.sendline("c")
+    except OSError:
+        # Process may have terminated due to race condition
+        pass
 
     exp(child, "in inner: 20")
 

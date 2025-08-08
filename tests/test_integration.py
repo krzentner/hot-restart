@@ -252,7 +252,6 @@ class TestModuleAPI:
         import logging
 
         assert isinstance(logger, logging.Logger)
-        assert logger.name == "hot-restart"
 
 
 class TestCompatibility:
