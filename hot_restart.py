@@ -877,6 +877,63 @@ def reload_function(def_path: list[str], func):
     return new_func
 
 
+def _patch_class(original_cls, new_cls):
+    """Patch an existing class with attributes from a new class definition.
+    
+    This preserves the class identity so isinstance checks and MRO remain intact,
+    while updating methods and attributes from the reloaded class.
+    """
+    # Special attributes to preserve from the original class
+    preserved_attrs = {
+        '__module__', '__name__', '__qualname__', '__bases__', '__mro__',
+        '__subclasses__', '__weakref__', '__dict__', '__doc__'
+    }
+    
+    # Get attributes directly defined in the new class (not inherited)
+    new_attrs = {}
+    for key in vars(new_cls):
+        if key not in preserved_attrs:
+            try:
+                value = getattr(new_cls, key)
+                # Skip slot descriptors and other built-in descriptors that can't be wrapped
+                if type(value).__name__ in ('wrapper_descriptor', 'method_descriptor', 
+                                           'builtin_function_or_method', 'getset_descriptor',
+                                           'member_descriptor'):
+                    if DEBUG_LOG:
+                        _LOGGER.debug(f"Skipping built-in descriptor {key} of type {type(value).__name__}")
+                    continue
+                new_attrs[key] = value
+            except AttributeError:
+                # Some attributes from dir() might not be directly accessible
+                pass
+    
+    # Remove old attributes that are not in the new class (except preserved ones)
+    old_attrs = list(vars(original_cls).keys())
+    new_attr_names = set(new_attrs.keys())
+    
+    for key in old_attrs:
+        if key not in preserved_attrs and key not in new_attr_names:
+            try:
+                delattr(original_cls, key)
+                if DEBUG_LOG:
+                    _LOGGER.debug(f"Removed old attribute {key} from {original_cls}")
+            except (AttributeError, TypeError):
+                # Some attributes might not be deletable
+                pass
+    
+    # Add/update attributes from the new class
+    for key, value in new_attrs.items():
+        try:
+            setattr(original_cls, key, value)
+            if DEBUG_LOG:
+                _LOGGER.debug(f"Patched attribute {key} in {original_cls}")
+        except (AttributeError, TypeError) as e:
+            if DEBUG_LOG:
+                _LOGGER.debug(f"Could not patch attribute {key} in {original_cls}: {e}")
+    
+    return original_cls
+
+
 def reload_class(def_path: list[str], cls):
     """Takes in a definition path and class, and returns a new version of
     that class reloaded from source.
@@ -937,7 +994,13 @@ def reload_class(def_path: list[str], cls):
             _LOGGER.error(f"Could not find {def_str} in reloaded module")
             return None
 
-    return new_cls
+    # Patch the original class with the new class definition
+    _patch_class(cls, new_cls)
+    
+    _LOGGER.debug(f"Patched class {def_str} in-place")
+    
+    # Return the patched original class (maintains identity)
+    return cls
 
 
 def reload_all_wrapped():
@@ -948,7 +1011,6 @@ def reload_all_wrapped():
     for def_path_str, base_func in list(_FUNC_BASE.items()):
         # Skip module prefix in def_path
         parts = def_path_str.split(".")
-        module_name = parts[0]
         def_path = parts[1:]
 
         new_func = reload_function(def_path, base_func)
@@ -962,7 +1024,6 @@ def reload_all_wrapped():
     for def_path_str, base_cls in list(_CLASS_BASE.items()):
         # Skip module prefix in def_path
         parts = def_path_str.split(".")
-        module_name = parts[0]
         def_path = parts[1:]
 
         new_cls = reload_class(def_path, base_cls)
@@ -972,6 +1033,11 @@ def reload_all_wrapped():
             # Wrap only new methods that aren't already wrapped
             for k, v in list(vars(new_cls).items()):
                 if callable(v) and not isinstance(v, type(len)):
+                    # Skip built-in descriptors that can't be wrapped
+                    if type(v).__name__ in ('wrapper_descriptor', 'method_descriptor', 
+                                           'builtin_function_or_method', 'getset_descriptor',
+                                           'member_descriptor'):
+                        continue
                     # Check if this method exists in the old class and is already wrapped
                     old_method = getattr(base_cls, k, None)
                     if old_method is None or not getattr(
@@ -980,22 +1046,8 @@ def reload_all_wrapped():
                         _LOGGER.info(f"Wrapping new/updated method {new_cls!r}.{k}")
                         setattr(new_cls, k, wrap(v, _recursive=True))
 
-            # Update the class in its module namespace
-            module = sys.modules.get(module_name)
-            if module and len(def_path) == 1:
-                # Top-level class
-                setattr(module, def_path[0], new_cls)
-            elif module and len(def_path) > 1:
-                # Nested class - navigate to parent
-                parent = module
-                for part in def_path[:-1]:
-                    parent = getattr(parent, part, None)
-                    if parent is None:
-                        break
-                if parent is not None:
-                    setattr(parent, def_path[-1], new_cls)
-
-            _LOGGER.debug(f"Reloaded class {def_path_str}")
+            # No need to update the class in module namespace since we patched it in-place
+            _LOGGER.debug(f"Reloaded class {def_path_str} (patched in-place)")
         else:
             _LOGGER.warning(f"Failed to reload class {def_path_str}")
 
@@ -1331,6 +1383,12 @@ def wrap_class(cls):
     # Wrap all methods
     for k, v in list(vars(cls).items()):
         if callable(v) and not isinstance(v, type(len)):  # Skip built-in functions
+            # Skip built-in descriptors that can't be wrapped
+            if type(v).__name__ in ('wrapper_descriptor', 'method_descriptor', 
+                                   'builtin_function_or_method', 'getset_descriptor',
+                                   'member_descriptor'):
+                _LOGGER.debug(f"Skipping built-in descriptor {cls!r}.{k}")
+                continue
             _LOGGER.debug(f"Wrapping {cls!r}.{k}")
             setattr(cls, k, wrap(v, _recursive=True))
     return cls
